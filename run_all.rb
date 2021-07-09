@@ -21,18 +21,26 @@ def post_all
   }
 end
 
+def run_solve_impl(i)
+  score = `#{$PATH} solve -p problems/#{i}.in -a answer/#{i}.out`.to_i
+  puts "##{i}: #{score}"
+  old_score = `#{$PATH} score -p problems/#{i}.in -a best/#{i}.out`.to_i
+  if score < old_score then
+    puts "Updated! #{i}"
+    `cp answer/#{i}.out best/#{i}.out`
+    post_answer(i)
+  end
+  score
+end
+
 def run_solve
   results = Parallel.map(1..59) {|i|
-    score = `#{$PATH} solve -p problems/#{i}.in -a answer/#{i}.out`.to_i
-    puts "##{i}: #{score}"
-    old_score = `#{$PATH} score -p problems/#{i}.in -a best/#{i}.out`.to_i
-    if score < old_score then
-      puts "Updated! #{i}"
-      `cp answer/#{i}.out best/#{i}.out`
-      post_answer(i)
-    end
-    score
+    run_solve_impl(i)
   }
 end
 
-run_solve
+if ARGV[0] != nil
+  run_solve_impl(ARGV[0].to_i)
+else
+  run_solve
+end
