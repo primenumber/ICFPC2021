@@ -30,6 +30,14 @@ impl Point {
         Point(self.0 - rhs.0, self.1 - rhs.1)
     }
 
+    fn add(&self, rhs: Point) -> Point {
+        Point(self.0 + rhs.0, self.1 + rhs.1)
+    }
+
+    fn scale(&self, rhs: f64) -> Point {
+        Point((self.0 as f64 * rhs) as i64, (self.1 as f64 * rhs) as i64)
+    }
+
     fn is_in_hole(&self, hole: &[Point]) -> bool {
         let mut parity = false;
         for (idx, &p) in hole.iter().enumerate() {
@@ -82,6 +90,17 @@ impl Segment {
     fn is_cross(&self, other: Self) -> bool {
         ccw(self.0, self.1, other.0) * ccw(self.0, self.1, other.1) == -1
             && ccw(other.0, other.1, self.0) * ccw(other.0, other.1, self.1) == -1
+    }
+
+    fn proj(&self, p: Point) -> Point {
+        let ap = p.sub(self.0);
+        let ba = self.0.sub(self.1);
+        let t = ap.dot(ba) as f64 / ba.norm() as f64;
+        self.0.add(ba.scale(t))
+    }
+
+    fn mirror(&self, p: Point) -> Point {
+        self.proj(p).scale(2.0).sub(p)
     }
 }
 
@@ -151,7 +170,7 @@ fn cost(pose: &Pose, prob: &Problem, weight: f64) -> f64 {
         let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
         let pose_seg = Segment(pose.vertices[u], pose.vertices[v]);
         let ratio = pose_seg.length() as f64 / orig_seg.length() as f64;
-        result += (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64) * 1e5 / weight).max(0.0);
+        result += (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64) * 1e6 / weight).max(0.0);
     }
     for &p in &prob.hole {
         let mut min_d = None;
@@ -174,6 +193,46 @@ fn move_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     let np = Point(p.0 + dx, p.1 + dy);
     pose.vertices[idx] = np;
+    let new_cost = cost(pose, prob, temp);
+    if new_cost <= old_cost {
+        return;
+    }
+    if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
+        pose.vertices[idx] = p;
+    }
+}
+
+fn flip_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
+    let old_cost = cost(pose, prob, temp);
+    let mut degrees = vec![0; pose.vertices.len()];
+    for &(u, v) in &prob.figure.edges {
+        degrees[u] += 1;
+        degrees[v] += 1;
+    }
+    let mut flippables = Vec::new();
+    for idx in 0..pose.vertices.len() {
+        if degrees[idx] == 2 {
+            flippables.push(idx);
+        }
+    }
+    if flippables.is_empty() {
+        return;
+    }
+    let idx = flippables[Uniform::from(0..flippables.len()).sample(rng)];
+    let mut neighbors = Vec::new();
+    for &(u, v) in &prob.figure.edges {
+        if u == idx {
+            neighbors.push(v);
+        } else if v == idx {
+            neighbors.push(u);
+        }
+    }
+    assert!(neighbors.len() == 2);
+
+    let line = Segment(pose.vertices[neighbors[0]], pose.vertices[neighbors[1]]);
+    let p = pose.vertices[idx];
+    pose.vertices[idx] = line.mirror(p);
+
     let new_cost = cost(pose, prob, temp);
     if new_cost <= old_cost {
         return;
@@ -238,8 +297,8 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
     };
 
     let start_temp: f64 = 1e6;
-    let end_temp: f64 = 1e3;
-    let loop_count = 1000000;
+    let end_temp: f64 = 1e2;
+    let loop_count = 500000;
 
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
@@ -252,8 +311,10 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
                 serde_json::to_string(&pose).unwrap()
             );
         }
-        if i % 10 == 0 {
+        if i % 7 == 0 {
             rotate_all(&mut pose, prob, &mut small_rng, temp);
+        } else if i % 5 == 0 {
+            flip_one(&mut pose, prob, &mut small_rng, temp);
         } else if i % 4 == 0 {
             move_all(&mut pose, prob, &mut small_rng, temp);
         } else {
