@@ -38,7 +38,7 @@ impl Point {
             if dp.1 > dq.1 {
                 mem::swap(&mut dp, &mut dq);
             }
-            if dp.1 < 0 && dq.1 >= 0 {
+            if dp.1 <= 0 && 0 < dq.1 {
                 if dp.cross(dq) < 0 {
                     parity = !parity;
                 }
