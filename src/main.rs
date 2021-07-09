@@ -2,6 +2,7 @@ use clap::{App, Arg, ArgMatches, SubCommand};
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::SmallRng;
 use rand::{Rng, SeedableRng};
+use rand_distr::Binomial;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
 use std::fs::File;
@@ -150,7 +151,7 @@ fn cost(pose: &Pose, prob: &Problem, weight: f64) -> f64 {
         let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
         let pose_seg = Segment(pose.vertices[u], pose.vertices[v]);
         let ratio = pose_seg.length() as f64 / orig_seg.length() as f64;
-        result += (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64) * 1e6 / weight).max(0.0);
+        result += (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64) * 1e5 / weight).max(0.0);
     }
     for &p in &prob.hole {
         let mut min_d = None;
@@ -169,9 +170,9 @@ fn move_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let old_cost = cost(pose, prob, temp);
     let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
     let p = pose.vertices[idx];
-    let k = Uniform::from(0..8).sample(rng);
-    let d = [0, 1, 1, 1, 0, -1, -1, -1, 0];
-    let np = Point(p.0 + d[k], p.1 + d[k + 1]);
+    let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let np = Point(p.0 + dx, p.1 + dy);
     pose.vertices[idx] = np;
     let new_cost = cost(pose, prob, temp);
     if new_cost <= old_cost {
@@ -184,10 +185,10 @@ fn move_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
 
 fn move_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let old_cost = cost(pose, prob, temp);
-    let k = Uniform::from(0..8).sample(rng);
-    let d = [0, 1, 1, 1, 0, -1, -1, -1, 0];
+    let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     for p in &mut pose.vertices {
-        *p = Point(p.0 + d[k], p.1 + d[k + 1]);
+        *p = Point(p.0 + dx, p.1 + dy);
     }
     let new_cost = cost(pose, prob, temp);
     if new_cost <= old_cost {
