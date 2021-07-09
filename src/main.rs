@@ -137,6 +137,22 @@ impl Pose {
                 if s.is_cross(t) {
                     return false;
                 }
+                if ccw(s.0, s.1, q) == 0 && q != s.0 && q != s.1 {
+                    let r = hole[(idx + 2) % hole.len()];
+                    let qp = p.sub(q);
+                    let qr = r.sub(q);
+                    let qa = s.0.sub(q);
+                    let qb = s.1.sub(q);
+                    if qp.cross(qr) < 0 {
+                        return false;
+                    }
+                    if qp.cross(qa) > 0 && qa.cross(qr) > 0 {
+                        return false;
+                    }
+                    if qp.cross(qb) > 0 && qb.cross(qr) > 0 {
+                        return false;
+                    }
+                }
             }
         }
         true
