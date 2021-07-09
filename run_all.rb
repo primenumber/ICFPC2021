@@ -28,7 +28,7 @@ def run_solve_impl(i)
   if score < old_score then
     puts "Updated! #{i}"
     `cp answer/#{i}.out best/#{i}.out`
-    post_answer(i)
+    #post_answer(i)
   end
   score
 end
@@ -39,8 +39,11 @@ def run_solve
   }
 end
 
-if ARGV[0] != nil
-  run_solve_impl(ARGV[0].to_i)
-else
+case ARGV[0]
+when nil then
   run_solve
+when "solve" then
+  run_solve_impl(ARGV[1].to_i)
+when "post" then
+  puts post_answer(ARGV[1].to_i)
 end
