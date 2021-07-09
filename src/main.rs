@@ -98,7 +98,7 @@ struct Problem {
     epsilon: u32,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct Pose {
     vertices: Vec<Point>,
 }
@@ -196,8 +196,37 @@ fn move_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         for p in &mut pose.vertices {
-            *p = Point(p.0 - d[k], p.1 - d[k + 1]);
+            *p = Point(p.0 - dx, p.1 - dy);
         }
+    }
+}
+
+fn rotate_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
+    let old_cost = cost(pose, prob, temp);
+    let rad = rng.gen::<f64>() - 0.5;
+    let mut sx = 0;
+    let mut sy = 0;
+    for p in &pose.vertices {
+        sx += p.0;
+        sy += p.1;
+    }
+    let gx = sx as f64 / pose.vertices.len() as f64;
+    let gy = sy as f64 / pose.vertices.len() as f64;
+    let mut new_pose = pose.clone();
+    for (idx, p) in pose.vertices.iter().enumerate() {
+        let x = p.0 as f64 - gx;
+        let y = p.1 as f64 - gy;
+        let rx = rad.cos() * x - rad.sin() * y;
+        let ry = rad.sin() * x + rad.cos() * y;
+        new_pose.vertices[idx] = Point(rx as i64, ry as i64);
+    }
+    let new_cost = cost(&new_pose, prob, temp);
+    if new_cost <= old_cost {
+        pose.vertices = new_pose.vertices;
+        return;
+    }
+    if rng.gen::<f64>() < ((old_cost - new_cost) / temp).exp() {
+        pose.vertices = new_pose.vertices;
     }
 }
 
@@ -223,7 +252,9 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
                 serde_json::to_string(&pose).unwrap()
             );
         }
-        if i % 4 == 0 {
+        if i % 10 == 0 {
+            rotate_all(&mut pose, prob, &mut small_rng, temp);
+        } else if i % 4 == 0 {
             move_all(&mut pose, prob, &mut small_rng, temp);
         } else {
             move_one(&mut pose, prob, &mut small_rng, temp);
