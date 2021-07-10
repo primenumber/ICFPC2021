@@ -6,6 +6,7 @@ use rand::{Rng, SeedableRng};
 use rand_distr::Binomial;
 use serde::{Deserialize, Serialize};
 use std::cmp::min;
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
@@ -339,7 +340,7 @@ fn move_one(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-) {
+) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
     let p = pose.vertices[idx];
@@ -349,17 +350,18 @@ fn move_one(
     pose.vertices[idx] = np;
     if !pose.is_in_hole_single_point(prob, idx) {
         pose.vertices[idx] = p;
-        return;
+        return false;
     }
     cache.update(pose, prob, idx);
     let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
-        return;
+        return true;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[idx] = p;
         cache.update(pose, prob, idx);
     }
+    false
 }
 
 fn flip_one(
@@ -368,7 +370,7 @@ fn flip_one(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-) {
+) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let mut degrees = vec![0; pose.vertices.len()];
     for &(u, v) in &prob.figure.edges {
@@ -382,7 +384,7 @@ fn flip_one(
         }
     }
     if flippables.is_empty() {
-        return;
+        return false;
     }
     let idx = flippables[Uniform::from(0..flippables.len()).sample(rng)];
     let mut neighbors = Vec::new();
@@ -401,18 +403,19 @@ fn flip_one(
 
     if !pose.is_in_hole_single_point(prob, idx) {
         pose.vertices[idx] = p;
-        return;
+        return false;
     }
 
     cache.update(pose, prob, idx);
     let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
-        return;
+        return true;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[idx] = p;
         cache.update(pose, prob, idx);
     }
+    false
 }
 
 fn move_two(
@@ -421,7 +424,7 @@ fn move_two(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-) {
+) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..prob.figure.edges.len()).sample(rng);
     let (u, v) = prob.figure.edges[idx];
@@ -437,13 +440,13 @@ fn move_two(
     if !pose.is_in_hole_single_point(prob, u) || !pose.is_in_hole_single_point(prob, v) {
         pose.vertices[u] = p;
         pose.vertices[v] = q;
-        return;
+        return false;
     }
     cache.update(pose, prob, u);
     cache.update(pose, prob, v);
     let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
-        return;
+        return true;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[u] = p;
@@ -451,6 +454,7 @@ fn move_two(
         cache.update(pose, prob, u);
         cache.update(pose, prob, v);
     }
+    false
 }
 
 fn rotate_two(
@@ -459,7 +463,7 @@ fn rotate_two(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-) {
+) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..prob.figure.edges.len()).sample(rng);
     let (u, v) = prob.figure.edges[idx];
@@ -475,13 +479,13 @@ fn rotate_two(
     if !pose.is_in_hole_single_point(prob, u) || !pose.is_in_hole_single_point(prob, v) {
         pose.vertices[u] = p;
         pose.vertices[v] = q;
-        return;
+        return false;
     }
     cache.update(pose, prob, u);
     cache.update(pose, prob, v);
     let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
-        return;
+        return true;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[u] = p;
@@ -489,6 +493,63 @@ fn rotate_two(
         cache.update(pose, prob, u);
         cache.update(pose, prob, v);
     }
+    false
+}
+
+fn move_several(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) -> bool {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
+    let size = Uniform::from(2..=pose.vertices.len()).sample(rng);
+    let sink = Uniform::from(0..pose.vertices.len()).sample(rng);
+    let mut neighbors = vec![Vec::new(); pose.vertices.len()];
+    for &(u, v) in &prob.figure.edges {
+        neighbors[u].push(v);
+        neighbors[v].push(u);
+    }
+    let mut visited = vec![false; pose.vertices.len()];
+    let mut uses = Vec::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(sink);
+    while !queue.is_empty() {
+        let i = queue.pop_front().unwrap();
+        uses.push(i);
+        if uses.len() == size {
+            break;
+        }
+        for &to in &neighbors[i] {
+            if visited[to] {
+                continue;
+            }
+            visited[to] = true;
+            queue.push_back(to);
+        }
+    }
+    assert!(uses.len() == size);
+
+    let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    for &idx in &uses {
+        let p = pose.vertices[idx];
+        pose.vertices[idx] = Point(p.0 + dx, p.1 + dy);
+    }
+    *cache = NearestCache::new(pose, prob);
+    let new_cost = cost(pose, prob, cache, temp);
+    if new_cost <= old_cost {
+        return true;
+    }
+    if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
+        for &idx in &uses {
+            let p = pose.vertices[idx];
+            pose.vertices[idx] = Point(p.0 - dx, p.1 - dy);
+        }
+        *cache = NearestCache::new(pose, prob);
+    }
+    false
 }
 
 fn move_all(
@@ -497,7 +558,7 @@ fn move_all(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-) {
+) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
@@ -507,7 +568,7 @@ fn move_all(
     *cache = NearestCache::new(pose, prob);
     let new_cost = cost(pose, prob, cache, temp);
     if new_cost <= old_cost {
-        return;
+        return true;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         for p in &mut pose.vertices {
@@ -515,6 +576,7 @@ fn move_all(
         }
         *cache = NearestCache::new(pose, prob);
     }
+    false
 }
 
 fn rotate_all(
@@ -523,7 +585,7 @@ fn rotate_all(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-) {
+) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let rad = rng.gen::<f64>() - 0.5;
     let mut sx = 0;
@@ -547,12 +609,13 @@ fn rotate_all(
     if new_cost <= old_cost {
         pose.vertices = new_pose.vertices;
         *cache = new_cache;
-        return;
+        return true;
     }
     if rng.gen::<f64>() < ((old_cost - new_cost) / temp).exp() {
         pose.vertices = new_pose.vertices;
         *cache = new_cache;
     }
+    false
 }
 
 fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
@@ -595,6 +658,14 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     let start_temp: f64 = 1e6;
     let end_temp: f64 = 1e0;
 
+    let mut improve_rorate_all = 0;
+    let mut improve_move_all = 0;
+    let mut improve_move_several = 0;
+    let mut improve_flip_one = 0;
+    let mut improve_move_one = 0;
+    let mut improve_move_two = 0;
+    let mut improve_rotate_two = 0;
+
     let mut cache = NearestCache::new(&pose, prob);
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
@@ -607,19 +678,40 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
                 serde_json::to_string(&pose).unwrap()
             );
         }
-        let rem = i % 64;
-        if rem <= 1 {
-            rotate_all(&mut pose, prob, &mut small_rng, temp, &mut cache);
-        } else if rem <= 3 {
-            move_all(&mut pose, prob, &mut small_rng, temp, &mut cache);
+        let rem = Uniform::from(0..64).sample(&mut small_rng);
+        if rem <= 3 {
+            if rotate_all(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_rorate_all += 1;
+            }
+        } else if rem <= 7 {
+            if move_all(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_move_all += 1;
+            }
         } else if rem <= 11 {
-            flip_one(&mut pose, prob, &mut small_rng, temp, &mut cache);
-        } else if rem <= 40 {
-            move_one(&mut pose, prob, &mut small_rng, temp, &mut cache);
+            if move_several(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_move_several += 1;
+            }
+        } else if rem <= 15 {
+            if flip_one(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_flip_one += 1;
+            }
+        } else if rem <= 31 {
+            if move_one(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_move_one += 1;
+            }
+        } else if rem <= 47 {
+            if move_two(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_move_two += 1;
+            }
         } else {
-            move_two(&mut pose, prob, &mut small_rng, temp, &mut cache);
-            rotate_two(&mut pose, prob, &mut small_rng, temp, &mut cache);
+            if rotate_two(&mut pose, prob, &mut small_rng, temp, &mut cache) {
+                improve_rotate_two += 1;
+            }
         }
+    }
+    if verbose {
+        eprintln!("[Stats] rotall: {}, movall: {}, movsev: {}, flipone: {}, movone: {}, movtwo: {}, rottwo: {}",
+            improve_rorate_all, improve_move_all, improve_move_several, improve_flip_one, improve_move_one, improve_move_two, improve_rotate_two);
     }
     pose
 }
