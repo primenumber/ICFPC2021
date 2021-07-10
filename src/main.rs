@@ -583,7 +583,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     }
 }
 
-fn solve(prob: &Problem, verbose: bool) -> Pose {
+fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
 
     let mut pose = gen_random_pose(prob, &mut small_rng);
@@ -593,7 +593,6 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
 
     let start_temp: f64 = 1e6;
     let end_temp: f64 = 1e0;
-    let loop_count = 500000;
 
     let mut cache = NearestCache::new(&pose, prob);
     for i in 0..loop_count {
@@ -657,10 +656,15 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
         Some(level) => level.parse::<i32>().unwrap() > 1,
         None => false,
     };
+    let default_loop_count = 500000;
+    let loop_count = match matches.value_of("loop-count") {
+        Some(s) => s.parse::<usize>().unwrap_or(default_loop_count),
+        None => default_loop_count,
+    };
 
     let prob = parse_problem(&input_file)?;
 
-    let answer = solve(&prob, verbose);
+    let answer = solve(&prob, verbose, loop_count);
 
     println!("{}", dislike(&answer, &prob));
 
@@ -697,7 +701,8 @@ fn main() -> std::io::Result<()> {
                         .required(true)
                         .takes_value(true),
                 )
-                .arg(Arg::with_name("loglevel").short("l").takes_value(true)),
+                .arg(Arg::with_name("loglevel").short("l").takes_value(true))
+                .arg(Arg::with_name("loop-count").short("n").takes_value(true)),
         )
         .subcommand(
             SubCommand::with_name("score")
