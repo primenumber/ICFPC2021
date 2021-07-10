@@ -39,6 +39,13 @@ impl Point {
         Point((self.0 as f64 * rhs) as i64, (self.1 as f64 * rhs) as i64)
     }
 
+    fn rotate(&self, theta: f64) -> Point {
+        Point(
+            (self.0 as f64 * theta.cos() - self.1 as f64 * theta.sin()) as i64,
+            (self.0 as f64 * theta.sin() + self.1 as f64 * theta.cos()) as i64,
+        )
+    }
+
     fn is_in_hole(&self, hole: &[Point]) -> bool {
         let mut parity = false;
         for (idx, &p) in hole.iter().enumerate() {
@@ -260,6 +267,50 @@ fn flip_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     }
 }
 
+fn move_two(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
+    let old_cost = cost(pose, prob, temp);
+    let idx = Uniform::from(0..prob.figure.edges.len()).sample(rng);
+    let (u, v) = prob.figure.edges[idx];
+    let p = pose.vertices[u];
+    let q = pose.vertices[v];
+    let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let np = Point(p.0 + dx, p.1 + dy);
+    let nq = Point(q.0 + dx, q.1 + dy);
+    pose.vertices[u] = np;
+    pose.vertices[v] = nq;
+    let new_cost = cost(pose, prob, temp);
+    if new_cost <= old_cost {
+        return;
+    }
+    if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
+        pose.vertices[u] = p;
+        pose.vertices[v] = q;
+    }
+}
+
+fn rotate_two(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
+    let old_cost = cost(pose, prob, temp);
+    let idx = Uniform::from(0..prob.figure.edges.len()).sample(rng);
+    let (u, v) = prob.figure.edges[idx];
+    let p = pose.vertices[u];
+    let q = pose.vertices[v];
+    let rad = rng.gen::<f64>() - 0.5;
+    let g = p.add(q).scale(0.5);
+    let np = p.sub(g).rotate(rad).add(g);
+    let nq = q.sub(g).rotate(rad).add(g);
+    pose.vertices[u] = np;
+    pose.vertices[v] = nq;
+    let new_cost = cost(&pose, prob, temp);
+    if new_cost <= old_cost {
+        return;
+    }
+    if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
+        pose.vertices[u] = p;
+        pose.vertices[v] = q;
+    }
+}
+
 fn move_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let old_cost = cost(pose, prob, temp);
     let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
@@ -295,7 +346,7 @@ fn rotate_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
         let y = p.1 as f64 - gy;
         let rx = rad.cos() * x - rad.sin() * y;
         let ry = rad.sin() * x + rad.cos() * y;
-        new_pose.vertices[idx] = Point(rx as i64, ry as i64);
+        new_pose.vertices[idx] = Point((rx + gx) as i64, (ry + gy) as i64);
     }
     let new_cost = cost(&new_pose, prob, temp);
     if new_cost <= old_cost {
@@ -358,12 +409,16 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
                 serde_json::to_string(&pose).unwrap()
             );
         }
-        if i % 7 == 0 {
+        let rem = i % 32;
+        if rem <= 1 {
             rotate_all(&mut pose, prob, &mut small_rng, temp);
-        } else if i % 5 == 0 {
+        } else if rem <= 3 {
             flip_one(&mut pose, prob, &mut small_rng, temp);
-        } else if i % 4 == 0 {
+        } else if rem <= 7 {
             move_all(&mut pose, prob, &mut small_rng, temp);
+        } else if rem <= 15 {
+            move_two(&mut pose, prob, &mut small_rng, temp);
+            rotate_two(&mut pose, prob, &mut small_rng, temp);
         } else {
             move_one(&mut pose, prob, &mut small_rng, temp);
         }
