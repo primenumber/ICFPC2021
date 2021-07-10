@@ -123,6 +123,19 @@ struct Figure {
 }
 
 #[derive(Serialize, Deserialize)]
+enum BonusType {
+    GLOBALIST,
+    BREAK_A_LEG,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Bonus {
+    bonus: BonusType,
+    problem: usize,
+    position: Point,
+}
+
+#[derive(Serialize, Deserialize)]
 struct Problem {
     hole: Vec<Point>,
     figure: Figure,
