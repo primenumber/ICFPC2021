@@ -100,8 +100,17 @@ impl Segment {
     }
 
     fn is_cross(&self, other: Self) -> bool {
-        ccw(self.0, self.1, other.0) * ccw(self.0, self.1, other.1) == -1
-            && ccw(other.0, other.1, self.0) * ccw(other.0, other.1, self.1) == -1
+        let x = ccw(self.0, self.1, other.0);
+        let y = ccw(self.0, self.1, other.1);
+        let z = ccw(other.0, other.1, self.0);
+        let w = ccw(other.0, other.1, self.1);
+        if x == -1 && y == 1 && z == 0 && w == -1 {
+            true
+        } else if x == 1 && y == -1 && z == -1 && w == 0 {
+            true
+        } else {
+            x * y == -1 && z * w == -1
+        }
     }
 
     fn proj(&self, p: Point) -> Point {
