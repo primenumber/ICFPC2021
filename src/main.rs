@@ -186,7 +186,8 @@ fn cost(pose: &Pose, prob: &Problem, weight: f64) -> f64 {
         let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
         let pose_seg = Segment(pose.vertices[u], pose.vertices[v]);
         let ratio = pose_seg.length() as f64 / orig_seg.length() as f64;
-        result += (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64) * 1e6 / weight).max(0.0);
+        result +=
+            (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64 * 0.9999) * 1e5 / weight).max(0.0);
     }
     for &p in &prob.hole {
         let mut min_d = None;
