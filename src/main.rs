@@ -23,6 +23,10 @@ impl Point {
         self.dot(*self)
     }
 
+    fn distance_sq(&self, rhs: Point) -> i64 {
+        self.sub(rhs).norm()
+    }
+
     fn cross(&self, rhs: Point) -> i64 {
         self.0 * rhs.1 - self.1 * rhs.0
     }
@@ -165,6 +169,43 @@ impl Pose {
         }
         true
     }
+
+    fn is_in_hole_single_point(&self, prob: &Problem, index: usize) -> bool {
+        if !self.vertices[index].is_in_hole(&prob.hole) {
+            return false;
+        }
+        let n = prob.hole.len();
+        for &(u, v) in &prob.figure.edges {
+            if u != index && v != index {
+                continue;
+            }
+            let s = Segment(self.vertices[u], self.vertices[v]);
+            for (idx, &p) in prob.hole.iter().enumerate() {
+                let q = prob.hole[(idx + 1) % n];
+                let t = Segment(p, q);
+                if s.is_cross(t) {
+                    return false;
+                }
+                if ccw(s.0, s.1, q) == 0 && q != s.0 && q != s.1 {
+                    let r = prob.hole[(idx + 2) % n];
+                    let qp = p.sub(q);
+                    let qr = r.sub(q);
+                    let qa = s.0.sub(q);
+                    let qb = s.1.sub(q);
+                    if qp.cross(qr) < 0 {
+                        return false;
+                    }
+                    if qp.cross(qa) > 0 && qa.cross(qr) > 0 {
+                        return false;
+                    }
+                    if qp.cross(qb) > 0 && qb.cross(qr) > 0 {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
 }
 
 fn parse_problem(input_path: &str) -> std::io::Result<Problem> {
@@ -185,10 +226,71 @@ fn parse_pose(input_path: &str) -> std::io::Result<Pose> {
     Ok(prob_json)
 }
 
-fn cost(pose: &Pose, prob: &Problem, weight: f64) -> f64 {
-    if !pose.is_in_hole(&prob.figure.edges, &prob.hole) {
-        return 1e12;
+struct NearestCache {
+    nearest_id: Vec<usize>,
+    nearest_distance: Vec<i64>,
+}
+
+impl NearestCache {
+    fn new(pose: &Pose, prob: &Problem) -> NearestCache {
+        let mut nearest_id = Vec::new();
+        let mut nearest_distance = Vec::new();
+        for &p in &prob.hole {
+            let mut min_d = 1_000_000_000_000_000_000;
+            let mut min_id = 0;
+            for (idx, &q) in pose.vertices.iter().enumerate() {
+                let d = p.distance_sq(q);
+                if d < min_d {
+                    min_d = d;
+                    min_id = idx;
+                }
+            }
+            nearest_id.push(min_id);
+            nearest_distance.push(min_d);
+        }
+        NearestCache {
+            nearest_id,
+            nearest_distance,
+        }
     }
+
+    fn sum(&self) -> i64 {
+        let mut sum = 0;
+        for d in &self.nearest_distance {
+            sum += d;
+        }
+        sum
+    }
+
+    fn update(&mut self, pose: &Pose, prob: &Problem, updated_id: usize) {
+        for (idx, &p) in prob.hole.iter().enumerate() {
+            if self.nearest_id[idx] == updated_id {
+                let new_distance = p.distance_sq(pose.vertices[updated_id]);
+                if new_distance > self.nearest_distance[idx] {
+                    let mut min_d = new_distance;
+                    let mut min_id = idx;
+                    for (j, &q) in pose.vertices.iter().enumerate() {
+                        let d = p.distance_sq(q);
+                        if d < min_d {
+                            min_d = d;
+                            min_id = j;
+                        }
+                    }
+                    self.nearest_id[idx] = min_id;
+                    self.nearest_distance[idx] = min_d;
+                }
+            } else {
+                let new_distance = p.distance_sq(pose.vertices[updated_id]);
+                if new_distance < self.nearest_distance[idx] {
+                    self.nearest_id[idx] = updated_id;
+                    self.nearest_distance[idx] = new_distance;
+                }
+            }
+        }
+    }
+}
+
+fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64) -> f64 {
     let mut result = 0.0;
     for &(u, v) in &prob.figure.edges {
         let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
@@ -197,38 +299,54 @@ fn cost(pose: &Pose, prob: &Problem, weight: f64) -> f64 {
         result +=
             (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64 * 0.9999) * 1e5 / weight).max(0.0);
     }
-    for &p in &prob.hole {
-        let mut min_d = None;
-        for &q in &pose.vertices {
-            min_d = Some(match min_d {
-                Some(d) => min(d, p.sub(q).norm()),
-                None => p.sub(q).norm(),
-            });
-        }
-        result += min_d.unwrap() as f64;
-    }
+    result += cache.sum() as f64;
     result
 }
 
-fn move_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
-    let old_cost = cost(pose, prob, temp);
+fn cost(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64) -> f64 {
+    if !pose.is_in_hole(&prob.figure.edges, &prob.hole) {
+        return 1e12;
+    }
+    cost_unchecked(pose, prob, cache, weight)
+}
+
+fn move_one(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
     let p = pose.vertices[idx];
     let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     let np = Point(p.0 + dx, p.1 + dy);
     pose.vertices[idx] = np;
-    let new_cost = cost(pose, prob, temp);
+    if !pose.is_in_hole_single_point(prob, idx) {
+        pose.vertices[idx] = p;
+        return;
+    }
+    cache.update(pose, prob, idx);
+    let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[idx] = p;
+        cache.update(pose, prob, idx);
     }
 }
 
-fn flip_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
-    let old_cost = cost(pose, prob, temp);
+fn flip_one(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
     let mut degrees = vec![0; pose.vertices.len()];
     for &(u, v) in &prob.figure.edges {
         degrees[u] += 1;
@@ -258,17 +376,30 @@ fn flip_one(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let p = pose.vertices[idx];
     pose.vertices[idx] = line.mirror(p);
 
-    let new_cost = cost(pose, prob, temp);
+    if !pose.is_in_hole_single_point(prob, idx) {
+        pose.vertices[idx] = p;
+        return;
+    }
+
+    cache.update(pose, prob, idx);
+    let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[idx] = p;
+        cache.update(pose, prob, idx);
     }
 }
 
-fn move_two(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
-    let old_cost = cost(pose, prob, temp);
+fn move_two(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..prob.figure.edges.len()).sample(rng);
     let (u, v) = prob.figure.edges[idx];
     let p = pose.vertices[u];
@@ -279,18 +410,34 @@ fn move_two(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let nq = Point(q.0 + dx, q.1 + dy);
     pose.vertices[u] = np;
     pose.vertices[v] = nq;
-    let new_cost = cost(pose, prob, temp);
+
+    if !pose.is_in_hole_single_point(prob, u) || !pose.is_in_hole_single_point(prob, v) {
+        pose.vertices[u] = p;
+        pose.vertices[v] = q;
+        return;
+    }
+    cache.update(pose, prob, u);
+    cache.update(pose, prob, v);
+    let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[u] = p;
         pose.vertices[v] = q;
+        cache.update(pose, prob, u);
+        cache.update(pose, prob, v);
     }
 }
 
-fn rotate_two(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
-    let old_cost = cost(pose, prob, temp);
+fn rotate_two(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..prob.figure.edges.len()).sample(rng);
     let (u, v) = prob.figure.edges[idx];
     let p = pose.vertices[u];
@@ -301,24 +448,41 @@ fn rotate_two(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     let nq = q.sub(g).rotate(rad).add(g);
     pose.vertices[u] = np;
     pose.vertices[v] = nq;
-    let new_cost = cost(&pose, prob, temp);
+
+    if !pose.is_in_hole_single_point(prob, u) || !pose.is_in_hole_single_point(prob, v) {
+        pose.vertices[u] = p;
+        pose.vertices[v] = q;
+        return;
+    }
+    cache.update(pose, prob, u);
+    cache.update(pose, prob, v);
+    let new_cost = cost_unchecked(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return;
     }
     if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
         pose.vertices[u] = p;
         pose.vertices[v] = q;
+        cache.update(pose, prob, u);
+        cache.update(pose, prob, v);
     }
 }
 
-fn move_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
-    let old_cost = cost(pose, prob, temp);
+fn move_all(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
     let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
     for p in &mut pose.vertices {
         *p = Point(p.0 + dx, p.1 + dy);
     }
-    let new_cost = cost(pose, prob, temp);
+    *cache = NearestCache::new(pose, prob);
+    let new_cost = cost(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return;
     }
@@ -326,11 +490,18 @@ fn move_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
         for p in &mut pose.vertices {
             *p = Point(p.0 - dx, p.1 - dy);
         }
+        *cache = NearestCache::new(pose, prob);
     }
 }
 
-fn rotate_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
-    let old_cost = cost(pose, prob, temp);
+fn rotate_all(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+) {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
     let rad = rng.gen::<f64>() - 0.5;
     let mut sx = 0;
     let mut sy = 0;
@@ -348,13 +519,16 @@ fn rotate_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
         let ry = rad.sin() * x + rad.cos() * y;
         new_pose.vertices[idx] = Point((rx + gx) as i64, (ry + gy) as i64);
     }
-    let new_cost = cost(&new_pose, prob, temp);
+    let new_cache = NearestCache::new(&new_pose, prob);
+    let new_cost = cost(&new_pose, prob, &new_cache, temp);
     if new_cost <= old_cost {
         pose.vertices = new_pose.vertices;
+        *cache = new_cache;
         return;
     }
     if rng.gen::<f64>() < ((old_cost - new_cost) / temp).exp() {
         pose.vertices = new_pose.vertices;
+        *cache = new_cache;
     }
 }
 
@@ -372,7 +546,8 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
         }
 
         let pose = Pose { vertices };
-        let c = cost(&pose, prob, 1e4);
+        let cache = NearestCache::new(&pose, prob);
+        let c = cost(&pose, prob, &cache, 1e4);
         if c < min_cost && pose.is_in_hole(&prob.figure.edges, &prob.hole) {
             current_pose = Some(pose);
             min_cost = c;
@@ -398,6 +573,7 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
     let end_temp: f64 = 1e0;
     let loop_count = 500000;
 
+    let mut cache = NearestCache::new(&pose, prob);
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
         let temp = (ratio * end_temp.ln() + (1.0 - ratio) * start_temp.ln()).exp();
@@ -405,22 +581,22 @@ fn solve(prob: &Problem, verbose: bool) -> Pose {
             eprintln!(
                 "{} {} {}",
                 temp,
-                cost(&pose, prob, temp),
+                cost(&pose, prob, &cache, temp),
                 serde_json::to_string(&pose).unwrap()
             );
         }
-        let rem = i % 32;
+        let rem = i % 64;
         if rem <= 1 {
-            rotate_all(&mut pose, prob, &mut small_rng, temp);
+            rotate_all(&mut pose, prob, &mut small_rng, temp, &mut cache);
         } else if rem <= 3 {
-            flip_one(&mut pose, prob, &mut small_rng, temp);
-        } else if rem <= 7 {
-            move_all(&mut pose, prob, &mut small_rng, temp);
-        } else if rem <= 15 {
-            move_two(&mut pose, prob, &mut small_rng, temp);
-            rotate_two(&mut pose, prob, &mut small_rng, temp);
+            move_all(&mut pose, prob, &mut small_rng, temp, &mut cache);
+        } else if rem <= 11 {
+            flip_one(&mut pose, prob, &mut small_rng, temp, &mut cache);
+        } else if rem <= 40 {
+            move_one(&mut pose, prob, &mut small_rng, temp, &mut cache);
         } else {
-            move_one(&mut pose, prob, &mut small_rng, temp);
+            move_two(&mut pose, prob, &mut small_rng, temp, &mut cache);
+            rotate_two(&mut pose, prob, &mut small_rng, temp, &mut cache);
         }
     }
     pose
