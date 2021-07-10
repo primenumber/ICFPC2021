@@ -146,6 +146,7 @@ struct Bonus {
 
 #[derive(Serialize, Deserialize)]
 struct Problem {
+    bonuses: Vec<Bonus>,
     hole: Vec<Point>,
     figure: Figure,
     epsilon: u32,
