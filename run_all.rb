@@ -5,7 +5,7 @@ $ENDPOINT = 'https://poses.live'
 $TOKEN = File::open('TOKEN.txt').read
 $PATH = "target/release/icfpc2021"
 
-$RANGE = 1..78
+$RANGE = 1..88
 
 def post_answer(id)
   data = File::open("best/#{id}.out").read
@@ -23,8 +23,8 @@ def post_all
   }
 end
 
-def run_solve_impl(i, quiet=false)
-  score = `#{$PATH} solve -p problems/#{i}.in -a answer/#{i}.out`.to_i
+def run_solve_impl(i, quiet=false, loop_count=1000000)
+  score = `#{$PATH} solve -p problems/#{i}.in -a answer/#{i}.out -n #{loop_count}`.to_i
   if !quiet then
     puts "##{i}: #{score}"
   end
@@ -38,15 +38,15 @@ def run_solve_impl(i, quiet=false)
   end
 end
 
-def run_solve
+def run_solve(loop_count=1000000)
   Parallel.map($RANGE) {|i|
     updated = false
     start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
     loop {
-      updated_new = run_solve_impl(i, true)
+      updated_new = run_solve_impl(i, true, loop_count)
       updated = updated || updated_new
       now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      if now - start > 180 then  # 3min
+      if now - start > 300 then  # 5min
         break
       end
       best_score = `#{$PATH} score -p problems/#{i}.in -a best/#{i}.out`.to_i
@@ -65,13 +65,18 @@ end
 
 case ARGV[0]
 when nil then
-  run_solve
+  run_solve(5000000)
 when "solve" then
   run_solve_impl(ARGV[1].to_i)
 when "post" then
   puts post_answer(ARGV[1].to_i)
 when "score" then
-  $RANGE.each {|i|
-    puts i, `#{$PATH} score -p problems/#{i}.in -a best/#{i}.out`
-  }
+  if ARGV[1] == nil then
+    $RANGE.each {|i|
+      puts i, `#{$PATH} score -p problems/#{i}.in -a best/#{i}.out`
+    }
+  else
+    i = ARGV[1].to_i
+    puts `#{$PATH} score -p problems/#{i}.in -a best/#{i}.out`
+  end
 end
