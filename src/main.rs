@@ -1,6 +1,7 @@
 use clap::{App, Arg, ArgMatches, SubCommand};
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::SmallRng;
+use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_distr::Binomial;
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,7 @@ use std::io::prelude::*;
 use std::io::{BufReader, BufWriter};
 use std::mem;
 
-#[derive(Clone, Copy, Deserialize, Serialize)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
 struct Point(i64, i64);
 
 impl Point {
@@ -306,15 +307,44 @@ fn rotate_all(pose: &mut Pose, prob: &Problem, rng: &mut SmallRng, temp: f64) {
     }
 }
 
+fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
+    let mut perm: Vec<_> = (0..prob.figure.vertices.len()).collect();
+    let mut min_cost = 1e12;
+    let mut current_pose = None;
+    for _i in 0..10000 {
+        let (left, _right) = perm.partial_shuffle(rng, prob.hole.len());
+
+        let mut vertices = vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()];
+
+        for (i, &j) in left.iter().enumerate() {
+            vertices[j] = prob.hole[i];
+        }
+
+        let pose = Pose { vertices };
+        let c = cost(&pose, prob, 1e4);
+        if c < min_cost && pose.is_in_hole(&prob.figure.edges, &prob.hole) {
+            current_pose = Some(pose);
+            min_cost = c;
+        }
+    }
+    match current_pose {
+        Some(pose) => pose,
+        None => Pose {
+            vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
+        },
+    }
+}
+
 fn solve(prob: &Problem, verbose: bool) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
 
-    let mut pose = Pose {
-        vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
-    };
+    let mut pose = gen_random_pose(prob, &mut small_rng);
+    if dislike(&pose, prob) == 0 {
+        return pose;
+    }
 
     let start_temp: f64 = 1e6;
-    let end_temp: f64 = 1e2;
+    let end_temp: f64 = 1e0;
     let loop_count = 500000;
 
     for i in 0..loop_count {
