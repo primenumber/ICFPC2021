@@ -333,11 +333,16 @@ fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64
 
     let mut result = 0.0;
     for &(u, v) in &prob.figure.edges {
-        let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
-        let pose_seg = Segment(pose.vertices[u], pose.vertices[v]);
-        let ratio = pose_seg.length() as f64 / orig_seg.length() as f64;
-        result +=
-            (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64 * 0.9999) * scale / weight).max(0.0);
+        let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]);
+        let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]);
+        let diff = max(
+            0,
+            1_000_000 * (pose_len - orig_len).abs() - prob.epsilon as i64 * orig_len,
+        );
+        if diff == 0 {
+            continue;
+        }
+        result += diff as f64 * scale / weight;
     }
     result += cache.sum() as f64;
     result
