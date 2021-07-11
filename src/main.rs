@@ -1002,10 +1002,9 @@ fn dislike(pose: &Pose, prob: &Problem) -> u64 {
         return 1_000_000_000_000_000_000;
     }
     for &(u, v) in &prob.figure.edges {
-        let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
-        let pose_seg = Segment(pose.vertices[u], pose.vertices[v]);
-        let ratio = pose_seg.length() as f64 / orig_seg.length() as f64;
-        if (ratio - 1.0).abs() > prob.epsilon as f64 / 1e6 {
+        let orig_len = Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length();
+        let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length();
+        if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon as i64 * orig_len {
             return 1_000_000_000_000_000_000;
         }
     }
