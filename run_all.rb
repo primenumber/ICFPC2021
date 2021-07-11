@@ -49,42 +49,30 @@ def calculate_best(i)
 end
 
 def run_solve(loop_count=1000000)
-  best_scores = Hash.new
-  $RANGE.each{ |i|
-    best_scores[i] = calculate_best(i)[0]
+  Parallel.each($RANGE.cycle(10)) {|i|
+    score = run_solve_impl(i, true, loop_count)
   }
-  Parallel.map($RANGE) {|i|
-    if best_scores[i] == 0 then
-      return
-    end
-    updated = false
-    start = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-    loop {
-      score = run_solve_impl(i, true, loop_count)
-      if score < best_scores[i] then
-        puts "Updated! ID=#{i}, Score=#{score}"
-        best_scores[i] = score
-        updated = true
-      end
-      now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
-      if now - start > 300 then  # 5min
-        break
-      end
-    }
-    [updated, i]
-  }.each {|b,idx|
-    if b
-      puts idx
-      post_answer(idx)
-    end
+end
+
+def run_solve_remote(loop_count=1000000)
+  nodes = 4
+  Parallel.each(0...nodes) {|nid|
+    name = sprintf("aries%02x", nid)
+    `scp #{$PATH} #{name}:ICFPC2021/`
+    `ssh #{name} '. .bashrc; cd ICFPC2021; bundle exec ruby run_all.rb solve'`
+    `scp #{name}:ICFPC2021/answer/* answer/`
   }
 end
 
 case ARGV[0]
-when nil then
-  run_solve(3000000)
 when "solve" then
-  run_solve_impl(ARGV[1].to_i)
+  if ARGV[1] == nil then
+    run_solve(3000000)
+  elsif ARGV[1] == "remote" then
+    run_solve_remote(3000000)
+  else
+    run_solve_impl(ARGV[1].to_i)
+  end
 when "post" then
   if ARGV[1] == nil then
     $RANGE.each {|i|
