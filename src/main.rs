@@ -316,13 +316,20 @@ impl NearestCache {
 }
 
 fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64) -> f64 {
+    let mut max_xy = 0;
+    for &p in &prob.hole {
+        max_xy = max(max_xy, p.0);
+        max_xy = max(max_xy, p.1);
+    }
+    let scale = (max_xy * max_xy) as f64;
+
     let mut result = 0.0;
     for &(u, v) in &prob.figure.edges {
         let orig_seg = Segment(prob.figure.vertices[u], prob.figure.vertices[v]);
         let pose_seg = Segment(pose.vertices[u], pose.vertices[v]);
         let ratio = pose_seg.length() as f64 / orig_seg.length() as f64;
         result +=
-            (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64 * 0.9999) * 1e5 / weight).max(0.0);
+            (((ratio - 1.0).abs() * 1e6 - prob.epsilon as f64 * 0.9999) * scale / weight).max(0.0);
     }
     result += cache.sum() as f64;
     result
