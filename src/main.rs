@@ -718,8 +718,8 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
         return pose;
     }
 
-    let start_temp: f64 = 1e5;
-    let end_temp: f64 = 1e-1;
+    let start_temp: f64 = 1e4;
+    let end_temp: f64 = 3e-2;
 
     let mut improve_rorate_all = 0;
     let mut improve_move_all = 0;
