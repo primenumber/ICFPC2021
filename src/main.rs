@@ -164,6 +164,7 @@ enum BonusType {
     GLOBALIST,
     BREAK_A_LEG,
     WALLHACK,
+    SUPERFLEX,
 }
 
 #[derive(Serialize, Deserialize)]
