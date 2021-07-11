@@ -733,7 +733,7 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
         let temp = (ratio * end_temp.ln() + (1.0 - ratio) * start_temp.ln()).exp();
-        if i % 10000 == 0 && verbose {
+        if i % 50000 == 0 && verbose {
             eprintln!(
                 "{} {} {}",
                 temp,
