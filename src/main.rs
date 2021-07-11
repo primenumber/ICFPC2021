@@ -114,6 +114,33 @@ impl Segment {
         }
     }
 
+    fn is_in_hole(&self, hole: &[Point]) -> bool {
+        for (idx, &p) in hole.iter().enumerate() {
+            let q = hole[(idx + 1) % hole.len()];
+            let t = Segment(p, q);
+            if self.is_cross(t) {
+                return false;
+            }
+            if ccw(self.0, self.1, q) == 0 && q != self.0 && q != self.1 {
+                let r = hole[(idx + 2) % hole.len()];
+                let qp = p.sub(q);
+                let qr = r.sub(q);
+                let qa = self.0.sub(q);
+                let qb = self.1.sub(q);
+                if qp.cross(qr) < 0 {
+                    return false;
+                }
+                if qp.cross(qa) > 0 && qa.cross(qr) > 0 {
+                    return false;
+                }
+                if qp.cross(qb) > 0 && qb.cross(qr) > 0 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     fn proj(&self, p: Point) -> Point {
         let ap = p.sub(self.0);
         let ba = self.0.sub(self.1);
@@ -168,28 +195,8 @@ impl Pose {
         }
         for &(u, v) in edges {
             let s = Segment(self.vertices[u], self.vertices[v]);
-            for (idx, &p) in hole.iter().enumerate() {
-                let q = hole[(idx + 1) % hole.len()];
-                let t = Segment(p, q);
-                if s.is_cross(t) {
-                    return false;
-                }
-                if ccw(s.0, s.1, q) == 0 && q != s.0 && q != s.1 {
-                    let r = hole[(idx + 2) % hole.len()];
-                    let qp = p.sub(q);
-                    let qr = r.sub(q);
-                    let qa = s.0.sub(q);
-                    let qb = s.1.sub(q);
-                    if qp.cross(qr) < 0 {
-                        return false;
-                    }
-                    if qp.cross(qa) > 0 && qa.cross(qr) > 0 {
-                        return false;
-                    }
-                    if qp.cross(qb) > 0 && qb.cross(qr) > 0 {
-                        return false;
-                    }
-                }
+            if !s.is_in_hole(hole) {
+                return false;
             }
         }
         true
