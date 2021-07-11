@@ -3,7 +3,7 @@ use rand::distributions::{Distribution, Uniform};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use rand_distr::Binomial;
+use rand_distr::{Binomial, Normal};
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
 use std::collections::VecDeque;
@@ -359,8 +359,8 @@ fn move_one(
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
     let p = pose.vertices[idx];
-    let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
-    let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let dx = Normal::new(0.0, 4.0).unwrap().sample(rng) as i64;
+    let dy = Normal::new(0.0, 4.0).unwrap().sample(rng) as i64;
     let np = Point(p.0 + dx, p.1 + dy);
     pose.vertices[idx] = np;
     if !pose.is_in_hole_single_point(prob, idx) {
@@ -445,8 +445,8 @@ fn move_two(
     let (u, v) = prob.figure.edges[idx];
     let p = pose.vertices[u];
     let q = pose.vertices[v];
-    let dx = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
-    let dy = Binomial::new(16, 0.5).unwrap().sample(rng) as i64 - 8;
+    let dx = Normal::new(0.0, 4.0).unwrap().sample(rng) as i64;
+    let dy = Normal::new(0.0, 4.0).unwrap().sample(rng) as i64;
     let np = Point(p.0 + dx, p.1 + dy);
     let nq = Point(q.0 + dx, q.1 + dy);
     pose.vertices[u] = np;
@@ -605,15 +605,18 @@ fn rotate_all(
     cache: &mut NearestCache,
 ) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
-    let rad = rng.gen::<f64>() - 0.5;
+    let rad = Normal::new(0.0f64, 0.5).unwrap().sample(rng);
     let mut sx = 0;
     let mut sy = 0;
     for p in &pose.vertices {
         sx += p.0;
         sy += p.1;
     }
-    let gx = sx as f64 / pose.vertices.len() as f64;
-    let gy = sy as f64 / pose.vertices.len() as f64;
+    let mut gx = sx as f64 / pose.vertices.len() as f64;
+    let mut gy = sy as f64 / pose.vertices.len() as f64;
+    let normal = Normal::new(0.0, 2.0).unwrap();
+    gx += normal.sample(rng);
+    gy += normal.sample(rng);
     let mut new_pose = pose.clone();
     for (idx, p) in pose.vertices.iter().enumerate() {
         let x = p.0 as f64 - gx;
