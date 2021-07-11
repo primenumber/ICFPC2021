@@ -5,7 +5,7 @@ use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use rand_distr::Binomial;
 use serde::{Deserialize, Serialize};
-use std::cmp::min;
+use std::cmp::{max, min};
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::prelude::*;
@@ -651,10 +651,51 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     }
 }
 
+fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
+    let mut max_x = 0;
+    let mut max_y = 0;
+    for &p in &prob.hole {
+        max_x = max(max_x, p.0);
+        max_y = max(max_y, p.1);
+    }
+    let mut points = Vec::new();
+    for x in 0..=max_x {
+        for y in 0..=max_y {
+            let p = Point(x, y);
+            if p.is_in_hole(&prob.hole) {
+                points.push(p);
+            }
+        }
+    }
+    let mut vertices = vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()];
+    let mut min_cost = 1e12;
+    let mut current_pose = None;
+    for _i in 0..1000 {
+        for v in &mut vertices {
+            *v = *points.choose(rng).unwrap();
+        }
+        let pose = Pose {
+            vertices: vertices.clone(),
+        };
+        let cache = NearestCache::new(&pose, prob);
+        let c = cost(&pose, prob, &cache, 1e4);
+        if c < min_cost && pose.is_in_hole(&prob.figure.edges, &prob.hole) {
+            current_pose = Some(pose);
+            min_cost = c;
+        }
+    }
+    match current_pose {
+        Some(pose) => pose,
+        None => Pose {
+            vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
+        },
+    }
+}
+
 fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
 
-    let mut pose = gen_random_pose(prob, &mut small_rng);
+    let mut pose = gen_random_pose_mk2(prob, &mut small_rng);
     if dislike(&pose, prob) == 0 {
         return pose;
     }
