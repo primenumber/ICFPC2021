@@ -345,7 +345,7 @@ fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64
 
 fn cost(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64) -> f64 {
     if !pose.is_in_hole(&prob.figure.edges, &prob.hole) {
-        return 1e12;
+        return 1e18;
     }
     cost_unchecked(pose, prob, cache, weight)
 }
