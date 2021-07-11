@@ -136,6 +136,7 @@ struct Figure {
 enum BonusType {
     GLOBALIST,
     BREAK_A_LEG,
+    WALLHACK,
 }
 
 #[derive(Serialize, Deserialize)]
