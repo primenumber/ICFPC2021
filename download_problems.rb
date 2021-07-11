@@ -11,7 +11,7 @@ def get_problem(id)
   response.body
 end
 
-(1..106).each {|id|
+(1..132).each {|id|
   puts id
   File.open("problems/#{id}.in", mode="w") {|f| f.write(get_problem(id))}
 }
