@@ -512,6 +512,9 @@ fn move_several(
         neighbors[u].push(v);
         neighbors[v].push(u);
     }
+    for ng in &mut neighbors {
+        ng.shuffle(rng);
+    }
     let mut visited = vec![false; pose.vertices.len()];
     let mut uses = Vec::new();
     let mut queue = VecDeque::new();
