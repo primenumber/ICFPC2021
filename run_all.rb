@@ -6,7 +6,7 @@ $ENDPOINT = 'https://poses.live'
 $TOKEN = File::open('TOKEN.txt').read
 $PATH = "target/release/icfpc2021"
 
-$RANGE = 1..106
+$RANGE = 1..132
 
 def post_answer(id)
   path = calculate_best(id)[1]
@@ -26,7 +26,7 @@ def post_all
   }
 end
 
-def run_solve_impl(i, quiet=false, loop_count=1000000)
+def run_solve_impl(i, loop_count, quiet=false)
   id = SecureRandom.uuid
   score = `#{$PATH} solve -p problems/#{i}.in -a answer/#{i}_#{id}.out -n #{loop_count}`.to_i
   if !quiet then
@@ -48,30 +48,32 @@ def calculate_best(i)
   [best_score, best_path]
 end
 
-def run_solve(loop_count=1000000)
+def run_solve(loop_count)
   Parallel.each($RANGE.cycle(10)) {|i|
-    score = run_solve_impl(i, true, loop_count)
+    score = run_solve_impl(i, loop_count, true)
   }
 end
 
-def run_solve_remote(loop_count=1000000)
+def run_solve_remote(loop_count)
   nodes = 4
   Parallel.each(0...nodes) {|nid|
     name = sprintf("aries%02x", nid)
-    `scp #{$PATH} #{name}:ICFPC2021/`
+    `scp run_all.rb #{name}:ICFPC2021/`
+    `scp #{$PATH} #{name}:ICFPC2021/target/release/`
     `ssh #{name} '. .bashrc; cd ICFPC2021; bundle exec ruby run_all.rb solve'`
-    `scp #{name}:ICFPC2021/answer/* answer/`
+    #`scp #{name}:ICFPC2021/answer/* answer/`
+    `rsync -au aries03:ICFPC2021/answer/ answer/`
   }
 end
 
 case ARGV[0]
 when "solve" then
   if ARGV[1] == nil then
-    run_solve(3000000)
+    run_solve(10000000)
   elsif ARGV[1] == "remote" then
-    run_solve_remote(3000000)
+    run_solve_remote(10000000)
   else
-    run_solve_impl(ARGV[1].to_i)
+    run_solve_impl(ARGV[1].to_i, 10000000)
   end
 when "post" then
   if ARGV[1] == nil then
