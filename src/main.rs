@@ -779,6 +779,224 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     pose
 }
 
+fn improve(
+    mut pose: Pose,
+    prob: &Problem,
+    matching: &[Option<usize>],
+    matching_rev: &[Option<usize>],
+    rng: &mut SmallRng,
+) -> Option<Pose> {
+    //eprintln!("Start improve process: {:?}", matching);
+    let mut cache = NearestCache::new(&pose, prob);
+    let mut old_cost = cost_unchecked(&pose, prob, &cache, 1e0);
+    if old_cost == 0.0 {
+        return Some(pose);
+    }
+    let mut rem_verts = Vec::new();
+    for (idx, &m) in matching_rev.iter().enumerate() {
+        if m == None {
+            rem_verts.push(idx);
+        }
+    }
+    let loop_count = 3000;
+    for i in 0..loop_count {
+        if i % 10000 == 9999 {
+            eprintln!("{} {}", i, old_cost);
+        }
+        let mut new_pose = pose.clone();
+        for &idx in &rem_verts {
+            if rng.gen::<f64>() < 0.5 {
+                let dx = Normal::new(0.0, 1.0).unwrap().sample(rng) as i64;
+                let dy = Normal::new(0.0, 1.0).unwrap().sample(rng) as i64;
+
+                new_pose.vertices[idx].0 += dx;
+                new_pose.vertices[idx].1 += dy;
+            }
+        }
+
+        if !new_pose.is_in_hole(&prob.figure.edges, &prob.hole) {
+            continue;
+        }
+
+        let new_cache = NearestCache::new(&new_pose, prob);
+
+        let new_cost = cost_unchecked(&new_pose, prob, &new_cache, 1e0);
+        if new_cost <= old_cost {
+            pose = new_pose;
+            cache = new_cache;
+            old_cost = new_cost;
+            if new_cost == 0.0 {
+                return Some(pose);
+            }
+            continue;
+        }
+
+        let scale = 3e8 * (1.03 - (i as f64 / loop_count as f64).sqrt());
+        if rng.gen::<f64>() < ((old_cost - new_cost) / scale).exp() {
+            pose = new_pose;
+            cache = new_cache;
+            old_cost = new_cost;
+            continue;
+        }
+    }
+    None
+}
+
+fn dfs(
+    i: usize,
+    prob: &Problem,
+    matrix: &[Vec<f64>],
+    matrix_shortest: &[Vec<f64>],
+    matching: &mut [Option<usize>],
+    matching_rev: &mut [Option<usize>],
+    rng: &mut SmallRng,
+) -> Option<Pose> {
+    let m = prob.hole.len();
+    let n = prob.figure.vertices.len();
+    let fv = &prob.figure.vertices;
+    let hv = &prob.hole;
+    if i == m {
+        let mut sx = 0;
+        let mut sy = 0;
+        for &p in &prob.hole {
+            sx += p.0;
+            sy += p.1;
+        }
+        let gx = sx / m as i64;
+        let gy = sy / m as i64;
+        let mut vertices = vec![Point(gx, gy); n];
+        for (hidx, fidx) in matching.iter().enumerate() {
+            vertices[fidx.unwrap()] = prob.hole[hidx];
+        }
+        let pose = Pose { vertices };
+        improve(pose, prob, matching, matching_rev, rng)
+    } else {
+        for j in 0..n {
+            if matching_rev[j] != None {
+                continue;
+            }
+            matching[i] = Some(j);
+            matching_rev[j] = Some(i);
+            let mut valid = true;
+            for &(u, v) in &prob.figure.edges {
+                if matching_rev[u] == None || matching_rev[v] == None {
+                    continue;
+                }
+                let uh = matching_rev[u].unwrap();
+                let vh = matching_rev[v].unwrap();
+                let s = Segment(hv[uh], hv[vh]);
+                if !s.is_in_hole(&prob.hole) {
+                    valid = false;
+                    break;
+                }
+                let d = hv[uh].distance_sq(hv[vh]);
+                let orig_d = fv[u].distance_sq(fv[v]);
+                let ratio = d as f64 / orig_d as f64;
+                if 1.0 - ratio > prob.epsilon as f64 * 1e-6 {
+                    valid = false;
+                    break;
+                }
+            }
+            if !valid {
+                matching[i] = None;
+                matching_rev[j] = None;
+                continue;
+            }
+            for k in 0..i {
+                let kf = matching[k].unwrap();
+                let d = hv[i].distance_sq(hv[k]);
+                let longest = matrix[j][kf];
+                if (d as f64).sqrt() > longest {
+                    valid = false;
+                    break;
+                }
+                let shortest = matrix_shortest[i][k];
+                if longest < shortest {
+                    valid = false;
+                    break;
+                }
+            }
+            if !valid {
+                matching[i] = None;
+                matching_rev[j] = None;
+                continue;
+            }
+            match dfs(
+                i + 1,
+                prob,
+                matrix,
+                matrix_shortest,
+                matching,
+                matching_rev,
+                rng,
+            ) {
+                Some(pose) => return Some(pose),
+                None => (),
+            };
+            matching[i] = None;
+            matching_rev[j] = None;
+        }
+        None
+    }
+}
+
+fn solve_for_zero(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
+    let mut small_rng = SmallRng::from_entropy();
+    let hv = &prob.hole;
+    let fv = &prob.figure.vertices;
+    let fe = &prob.figure.edges;
+    let n = fv.len();
+    let m = hv.len();
+    let mut matrix = vec![vec![f64::INFINITY; n]; n];
+    for &(u, v) in fe {
+        let max_dist =
+            ((fv[u].distance_sq(fv[v]) as f64) * (1.0 + prob.epsilon as f64 * 1e-6)).sqrt();
+        matrix[u][v] = max_dist;
+        matrix[v][u] = max_dist;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                matrix[i][j] = matrix[i][j].min(matrix[i][k] + matrix[k][j]);
+            }
+        }
+    }
+    let mut matrix_shortest = vec![vec![f64::INFINITY; m]; m];
+    for i in 0..m {
+        matrix_shortest[i][i] = 0.0;
+        for j in 0..m {
+            let s = Segment(hv[i], hv[j]);
+            if s.is_in_hole(hv) {
+                matrix_shortest[i][j] = (s.length() as f64).sqrt();
+            }
+        }
+    }
+    for k in 0..m {
+        for i in 0..m {
+            for j in 0..m {
+                matrix_shortest[i][j] =
+                    matrix_shortest[i][j].min(matrix_shortest[i][k] + matrix_shortest[k][j]);
+            }
+        }
+    }
+    let mut matching = vec![None; hv.len()];
+    let mut matching_rev = vec![None; n];
+    match dfs(
+        0,
+        prob,
+        &matrix,
+        &matrix_shortest,
+        &mut matching,
+        &mut matching_rev,
+        &mut small_rng,
+    ) {
+        Some(pose) => pose,
+        None => Pose {
+            vertices: vec![*hv.first().unwrap(); n],
+        },
+    }
+}
+
 fn dislike(pose: &Pose, prob: &Problem) -> u64 {
     if !pose.is_in_hole(&prob.figure.edges, &prob.hole) {
         return 1_000_000_000_000_000_000;
@@ -808,6 +1026,7 @@ fn dislike(pose: &Pose, prob: &Problem) -> u64 {
 fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
     let input_file = matches.value_of("problem").unwrap();
     let output_file = matches.value_of("answer").unwrap();
+    let zero_desired = matches.is_present("zero");
     let verbose = match matches.value_of("loglevel") {
         Some(level) => level.parse::<i32>().unwrap() > 1,
         None => false,
@@ -820,7 +1039,11 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
 
     let prob = parse_problem(&input_file)?;
 
-    let answer = solve(&prob, verbose, loop_count);
+    let answer = if zero_desired {
+        solve_for_zero(&prob, verbose, loop_count)
+    } else {
+        solve(&prob, verbose, loop_count)
+    };
 
     println!("{}", dislike(&answer, &prob));
 
@@ -858,6 +1081,7 @@ fn main() -> std::io::Result<()> {
                         .takes_value(true),
                 )
                 .arg(Arg::with_name("loglevel").short("l").takes_value(true))
+                .arg(Arg::with_name("zero").short("z"))
                 .arg(Arg::with_name("loop-count").short("n").takes_value(true)),
         )
         .subcommand(
