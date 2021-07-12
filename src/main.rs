@@ -125,13 +125,13 @@ impl Segment {
             if self.is_cross(t) {
                 return false;
             }
-            if ccw(self.0, self.1, q) == 0 && q != self.0 && q != self.1 {
+            if ccw(self.0, self.1, q) == 0 {
                 let r = hole[(idx + 2) % hole.len()];
                 let qp = p.sub(q);
                 let qr = r.sub(q);
                 let qa = self.0.sub(q);
                 let qb = self.1.sub(q);
-                if qp.cross(qr) < 0 {
+                if qp.cross(qr) < 0 && q != self.0 && q != self.1 {
                     return false;
                 }
                 if qp.cross(qa) > 0 && qa.cross(qr) > 0 {
