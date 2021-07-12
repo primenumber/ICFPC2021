@@ -76,11 +76,11 @@ end
 case ARGV[0]
 when "solve" then
   if ARGV[1] == nil then
-    run_solve(20000000)
+    run_solve(4000000)
   elsif ARGV[1] == "remote" then
-    run_solve_remote(20000000)
+    run_solve_remote(4000000)
   else
-    run_solve_impl(ARGV[1].to_i, 20000000)
+    run_solve_impl(ARGV[1].to_i, 4000000)
   end
 when "post" then
   if ARGV[1] == nil then
