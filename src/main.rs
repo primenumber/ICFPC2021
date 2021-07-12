@@ -435,26 +435,41 @@ fn move_one_mk2(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-    points: &[Point],
     neighbors: &[Vec<usize>],
 ) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
-    let mut candidates = Vec::new();
+    let mut shortest = 1_000_000;
+    let mut short_id = idx;
     let fv = &prob.figure.vertices;
-    for &p in points {
-        let mut ok = true;
-        for &ng in &neighbors[idx] {
-            let q = pose.vertices[ng];
-            let d = p.distance_sq(q);
-            let orig_d = fv[idx].distance_sq(fv[ng]);
-            if 1_000_000 * (d - orig_d).abs() - prob.epsilon * orig_d > 0 {
-                ok = false;
-                break;
-            }
+    for &ng in &neighbors[idx] {
+        let orig_d = fv[idx].distance_sq(fv[ng]);
+        let longest = (prob.epsilon + 1_000_000) * orig_d / 1_000_000;
+        if longest < shortest {
+            shortest = longest;
+            short_id = ng;
         }
-        if ok {
-            candidates.push(p);
+    }
+    let q = fv[short_id];
+    let mut candidates = Vec::new();
+    let shortest_sqrt = (shortest as f64).sqrt().floor() as i64;
+    for dx in -shortest_sqrt..=shortest_sqrt {
+        let dymx = ((shortest - dx * dx) as f64).sqrt().floor() as i64;
+        for dy in -dymx..=dymx {
+            let p = q.add(Point(dx, dy));
+            let mut ok = true;
+            for &ng in &neighbors[idx] {
+                let r = pose.vertices[ng];
+                let d = p.distance_sq(r);
+                let orig_d = fv[idx].distance_sq(fv[ng]);
+                if 1_000_000 * (d - orig_d).abs() - prob.epsilon * orig_d > 0 {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                candidates.push(p);
+            }
         }
     }
     if candidates.is_empty() {
@@ -881,7 +896,6 @@ fn improve_process(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
-    points: &[Point],
     neighbors: &[Vec<usize>],
     counter: &mut ImproveCounter,
 ) {
@@ -907,7 +921,7 @@ fn improve_process(
             counter.move_one += 1;
         }
     } else if rem <= 33 {
-        if move_one_mk2(pose, prob, rng, temp, cache, points, neighbors) {
+        if move_one_mk2(pose, prob, rng, temp, cache, neighbors) {
             counter.move_one_mk2 += 1;
         }
     } else if rem <= 47 {
@@ -943,7 +957,6 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
         rotate_two: 0,
     };
 
-    let points = in_hole_points(prob);
     let neighbors = negibor_list(prob);
     let mut cache = NearestCache::new(&pose, prob);
     for i in 0..loop_count {
@@ -955,7 +968,6 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
             &mut small_rng,
             temp,
             &mut cache,
-            &points,
             &neighbors,
             &mut counter,
         );
