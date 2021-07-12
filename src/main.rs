@@ -385,6 +385,66 @@ fn move_one(
     false
 }
 
+fn move_one_mk2(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+    points: &[Point],
+) -> bool {
+    let old_cost = cost_unchecked(pose, prob, cache, temp);
+    let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
+    let mut neighbors = Vec::new();
+    for &(u, v) in &prob.figure.edges {
+        if u == idx {
+            neighbors.push(v);
+        } else if v == idx {
+            neighbors.push(u);
+        }
+    }
+    let mut candidates = Vec::new();
+    let fv = &prob.figure.vertices;
+    for &p in points {
+        let mut ok = true;
+        for &ng in &neighbors {
+            let q = pose.vertices[ng];
+            let d = p.distance_sq(q);
+            let orig_d = fv[idx].distance_sq(fv[ng]);
+            if 1_000_000 * (d - orig_d).abs() - prob.epsilon * orig_d > 0 {
+                ok = false;
+                break;
+            }
+        }
+        if ok {
+            candidates.push(p);
+        }
+    }
+    if candidates.is_empty() {
+        return false;
+    }
+    let p = pose.vertices[idx];
+    let np = *candidates.choose(rng).unwrap();
+    if p == np {
+        return false;
+    }
+    pose.vertices[idx] = np;
+    if !pose.is_in_hole_single_point(prob, idx) {
+        pose.vertices[idx] = p;
+        return false;
+    }
+    cache.update(pose, prob, idx);
+    let new_cost = cost_unchecked(pose, prob, cache, temp);
+    if new_cost <= old_cost {
+        return true;
+    }
+    if rng.gen::<f64>() > ((old_cost - new_cost) / temp).exp() {
+        pose.vertices[idx] = p;
+        cache.update(pose, prob, idx);
+    }
+    false
+}
+
 fn flip_one(
     pose: &mut Pose,
     prob: &Problem,
@@ -674,7 +734,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     }
 }
 
-fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
+fn in_hole_points(prob: &Problem) -> Vec<Point> {
     let mut max_x = 0;
     let mut max_y = 0;
     for &p in &prob.hole {
@@ -690,6 +750,11 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
             }
         }
     }
+    points
+}
+
+fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
+    let points = in_hole_points(prob);
     let mut vertices = vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()];
     let mut min_cost = 1e12;
     let mut current_pose = None;
@@ -731,10 +796,12 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     let mut improve_move_several = 0;
     let mut improve_flip_one = 0;
     let mut improve_move_one = 0;
+    let mut improve_move_one_mk2 = 0;
     let mut improve_move_two = 0;
     let mut improve_rotate_two = 0;
 
     let mut cache = NearestCache::new(&pose, prob);
+    let points = in_hole_points(prob);
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
         let temp = (ratio * end_temp.ln() + (1.0 - ratio) * start_temp.ln()).exp();
@@ -767,6 +834,10 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
             if move_one(&mut pose, prob, &mut small_rng, temp, &mut cache) {
                 improve_move_one += 1;
             }
+        } else if rem <= 33 {
+            if move_one_mk2(&mut pose, prob, &mut small_rng, temp, &mut cache, &points) {
+                improve_move_one_mk2 += 1;
+            }
         } else if rem <= 47 {
             if move_two(&mut pose, prob, &mut small_rng, temp, &mut cache) {
                 improve_move_two += 1;
@@ -778,8 +849,15 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
         }
     }
     if verbose {
-        eprintln!("[Stats] rotall: {}, movall: {}, movsev: {}, flipone: {}, movone: {}, movtwo: {}, rottwo: {}",
-            improve_rorate_all, improve_move_all, improve_move_several, improve_flip_one, improve_move_one, improve_move_two, improve_rotate_two);
+        eprintln!("[Stats]");
+        eprintln!(
+            "rotall: {}, movall: {}, movsev: {}, flipone: {}",
+            improve_rorate_all, improve_move_all, improve_move_several, improve_flip_one
+        );
+        eprintln!(
+            "movone: {}, movone_mk2: {}, movtwo: {}, rottwo: {}",
+            improve_move_one, improve_move_one_mk2, improve_move_two, improve_rotate_two
+        );
     }
     pose
 }
