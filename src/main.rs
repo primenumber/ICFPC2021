@@ -755,7 +755,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
         }
 
         let pose = Pose {
-            bonus: None,
+            bonus: *USE_BONUS.get().unwrap(),
             vertices,
         };
         let cache = NearestCache::new(&pose, prob);
@@ -768,7 +768,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     match current_pose {
         Some(pose) => pose,
         None => Pose {
-            bonus: None,
+            bonus: *USE_BONUS.get().unwrap(),
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
@@ -804,7 +804,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
             *v = *points.choose(rng).unwrap();
         }
         let pose = Pose {
-            bonus: None,
+            bonus: *USE_BONUS.get().unwrap(),
             vertices: vertices.clone(),
         };
         let cache = NearestCache::new(&pose, prob);
@@ -817,7 +817,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
     match current_pose {
         Some(pose) => pose,
         None => Pose {
-            bonus: None,
+            bonus: *USE_BONUS.get().unwrap(),
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
@@ -826,7 +826,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
 fn gen_random_pose_mk3(prob: &Problem, rng: &mut SmallRng, verbose: bool, scale: f64) -> Pose {
     let points = in_hole_points(prob);
     let mut initial_pose = Pose {
-        bonus: None,
+        bonus: *USE_BONUS.get().unwrap(),
         vertices: prob.figure.vertices.clone(),
     };
     let mut max_x = 0;
@@ -1215,7 +1215,7 @@ fn solve_for_zero(prob: &Problem, verbose: bool, _loop_count: usize) -> Pose {
     ) {
         Some(pose) => pose,
         None => Pose {
-            bonus: None,
+            bonus: *USE_BONUS.get().unwrap(),
             vertices: vec![*hv.first().unwrap(); n],
         },
     }
