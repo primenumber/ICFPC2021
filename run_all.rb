@@ -12,19 +12,24 @@ def touch(id)
   `touch flags/#{id}.flag`
 end
 
-def post_answer(id)
-  path = calculate_best(id)[1]
-  return if path == nil
+def post_answer_impl(id, path)
   f = File.open(path)
-  return if f.mtime <= File::mtime("flags/#{id}.flag")
-  puts "Updated: #{id}"
   data = f.read
   url = URI.parse("#{$ENDPOINT}/api/problems/#{id}/solutions")
   http = Net::HTTP.new(url.host, url.port)
   http.use_ssl = true
   response = http.post(url.request_uri, data, header = { 'Authorization': "Bearer #{$TOKEN}" })
-  touch(id)
   response.body
+end
+
+def post_answer(id)
+  path = calculate_best(id)[1]
+  return if path == nil
+  return if File::mtime(path) <= File::mtime("flags/#{id}.flag")
+  puts "Updated: #{id}"
+  res = post_answer_impl(id, path)
+  touch(id)
+  res
 end
 
 def post_all
@@ -36,7 +41,7 @@ end
 
 def run_solve_impl(i, loop_count, bonus=nil, quiet=false)
   bonus_flag = if bonus != nil then
-    "-u #{bonus}"
+    "-u '#{bonus}'"
   else
     ""
   end
@@ -50,7 +55,7 @@ end
 
 def calculate_best(i, bonus=nil)
   bonus_flag = if bonus != nil then
-    "-u #{bonus}"
+    "-u '#{bonus}'"
   else
     ""
   end
@@ -67,7 +72,7 @@ def calculate_best(i, bonus=nil)
 end
 
 def run_solve(loop_count, use_bonus)
-  Parallel.each($RANGE.cycle(5)) {|i|
+  Parallel.each($RANGE.cycle(10)) {|i|
     score = run_solve_impl(i, loop_count, use_bonus, true)
   }
 end
@@ -92,11 +97,11 @@ case ARGV[0]
 when "solve" then
   bonus = ARGV[2]
   if ARGV[1] == "local" then
-    run_solve(2000000, bonus)
+    run_solve(1000000, bonus)
   elsif ARGV[1] == "remote" then
-    run_solve_remote(2000000, bonus)
+    run_solve_remote(1000000, bonus)
   else
-    run_solve_impl(ARGV[1].to_i, 2000000, bonus)
+    run_solve_impl(ARGV[1].to_i, 1000000, bonus)
   end
 when "post" then
   if ARGV[1] == nil then
@@ -106,6 +111,8 @@ when "post" then
   else
     puts post_answer(ARGV[1].to_i)
   end
+when "post_direct" then
+  puts post_answer_impl(ARGV[1].to_i, ARGV[2])
 when "best" then
   bonus = ARGV[1]
   Parallel.map($RANGE) {|i|
