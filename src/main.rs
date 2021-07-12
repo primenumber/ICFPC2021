@@ -358,22 +358,33 @@ fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64
     let scale = (max_xy * max_xy) as f64;
 
     let mut result = 0.0;
-    let mut max_diff = 0;
-    for &(u, v) in &prob.figure.edges {
-        let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]);
-        let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]);
-        let diff = max(
-            0,
-            1_000_000 * (pose_len - orig_len).abs() - prob.epsilon * orig_len,
-        );
-        if diff == 0 {
-            continue;
+    if pose.bonus == Some(BonusType::GLOBALIST) {
+        let mut sum = 0.0;
+        for &(u, v) in &prob.figure.edges {
+            let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]) as f64;
+            let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]) as f64;
+            sum += 1e6 * (pose_len / orig_len - 1.0).abs();
         }
-        max_diff = max(max_diff, diff);
-        result += diff as f64 * scale / weight;
-    }
-    if pose.bonus == Some(BonusType::SUPERFLEX) {
-        result -= max_diff as f64 * scale / weight;
+        sum -= (prob.figure.edges.len() * prob.epsilon as usize) as f64;
+        result += sum.max(0.0) * scale / weight;
+    } else {
+        let mut max_diff = 0;
+        for &(u, v) in &prob.figure.edges {
+            let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]);
+            let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]);
+            let diff = max(
+                0,
+                1_000_000 * (pose_len - orig_len).abs() - prob.epsilon * orig_len,
+            );
+            if diff == 0 {
+                continue;
+            }
+            max_diff = max(max_diff, diff);
+            result += diff as f64 * scale / weight;
+        }
+        if pose.bonus == Some(BonusType::SUPERFLEX) {
+            result -= max_diff as f64 * scale / weight;
+        }
     }
     result += cache.sum() as f64;
     let bonuses = WANT_BONUS.get().unwrap();
@@ -1280,12 +1291,12 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
     let input_file = matches.value_of("problem").unwrap();
     let output_file = matches.value_of("answer").unwrap();
     let zero_desired = matches.is_present("zero");
-    let use_superflex = matches.is_present("superflex");
-    if use_superflex {
-        USE_BONUS.set(Some(BonusType::SUPERFLEX)).unwrap();
-    } else {
-        USE_BONUS.set(None).unwrap();
-    }
+    USE_BONUS
+        .set(match matches.value_of("use-bonus") {
+            Some(s) => Some(serde_json::from_str(&format!("{:?}", s)).unwrap()),
+            None => None,
+        })
+        .unwrap();
     let want_superflex = matches.is_present("want-superflex");
     let verbose = match matches.value_of("loglevel") {
         Some(level) => level.parse::<i32>().unwrap() > 1,
@@ -1329,9 +1340,15 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
 fn command_score(matches: &ArgMatches) -> std::io::Result<()> {
     let prob_file = matches.value_of("problem").unwrap();
     let ans_file = matches.value_of("answer").unwrap();
+    let use_bonus = match matches.value_of("use-bonus") {
+        Some(s) => Some(serde_json::from_str(&format!("{:?}", s)).unwrap()),
+        None => None,
+    };
 
     let prob = parse_problem(&prob_file)?;
-    let answer = parse_pose(&ans_file)?;
+    let mut answer = parse_pose(&ans_file)?;
+    // FIXME: check bonus can be used
+    answer.bonus = use_bonus;
 
     println!("{}", dislike(&answer, &prob));
     Ok(())
@@ -1366,7 +1383,7 @@ fn main() -> std::io::Result<()> {
                 )
                 .arg(Arg::with_name("loglevel").short("l").takes_value(true))
                 .arg(Arg::with_name("zero").short("z"))
-                .arg(Arg::with_name("superflex").short("s"))
+                .arg(Arg::with_name("use-bonus").short("u").takes_value(true))
                 .arg(Arg::with_name("want-superflex").short("w"))
                 .arg(Arg::with_name("loop-count").short("n").takes_value(true)),
         )
@@ -1383,7 +1400,8 @@ fn main() -> std::io::Result<()> {
                         .short("a")
                         .required(true)
                         .takes_value(true),
-                ),
+                )
+                .arg(Arg::with_name("use-bonus").short("u").takes_value(true)),
         )
         .subcommand(
             SubCommand::with_name("check-bonuses")
