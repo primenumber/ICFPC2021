@@ -69,7 +69,7 @@ def run_solve_remote(loop_count)
     `scp run_all.rb #{name}:ICFPC2021/`
     `scp #{$PATH} #{name}:ICFPC2021/target/release/`
     `ssh #{name} '. .bashrc; cd ICFPC2021; bundle exec ruby run_all.rb solve'`
-    `rsync -au aries03:ICFPC2021/answer/ answer/`
+    `rsync -au #{name}:ICFPC2021/answer/ answer/`
   }
 end
 
@@ -104,5 +104,11 @@ when "best" then
 when "touch" then
   $RANGE.each {|i|
     touch(i)
+  }
+when "sync" then
+  nodes = 4
+  Parallel.each(0...nodes) {|nid|
+    name = sprintf("aries%02x", nid)
+    `rsync -au #{name}:ICFPC2021/answer/ answer/`
   }
 end
