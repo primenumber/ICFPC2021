@@ -69,7 +69,6 @@ def run_solve_remote(loop_count)
     `scp run_all.rb #{name}:ICFPC2021/`
     `scp #{$PATH} #{name}:ICFPC2021/target/release/`
     `ssh #{name} '. .bashrc; cd ICFPC2021; bundle exec ruby run_all.rb solve'`
-    #`scp #{name}:ICFPC2021/answer/* answer/`
     `rsync -au aries03:ICFPC2021/answer/ answer/`
   }
 end
