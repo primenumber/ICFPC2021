@@ -943,20 +943,12 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
         rotate_two: 0,
     };
 
-    let mut cache = NearestCache::new(&pose, prob);
     let points = in_hole_points(prob);
     let neighbors = negibor_list(prob);
+    let mut cache = NearestCache::new(&pose, prob);
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
         let temp = (ratio * end_temp.ln() + (1.0 - ratio) * start_temp.ln()).exp();
-        if i % 50000 == 0 && verbose {
-            eprintln!(
-                "{} {} {}",
-                temp,
-                cost(&pose, prob, &cache, temp),
-                serde_json::to_string(&pose).unwrap()
-            );
-        }
         improve_process(
             &mut pose,
             prob,
@@ -967,7 +959,17 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
             &neighbors,
             &mut counter,
         );
+        if i % 50000 == 49999 && verbose {
+            eprintln!(
+                "{} {} {} {}",
+                i,
+                temp,
+                cost(&pose, prob, &cache, temp),
+                serde_json::to_string(&pose).unwrap()
+            );
+        }
     }
+
     if verbose {
         eprintln!("[Stats] {:?}", counter);
     }
