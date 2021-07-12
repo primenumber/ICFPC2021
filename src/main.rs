@@ -16,7 +16,7 @@ use std::mem;
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
 struct Point(i64, i64);
 
-static USE_BONUS: OnceCell<Option<BonusType>> = OnceCell::new();
+static USE_BONUS: OnceCell<Vec<Bonus2>> = OnceCell::new();
 static WANT_BONUS: OnceCell<Vec<Bonus>> = OnceCell::new();
 
 impl Point {
@@ -182,6 +182,12 @@ struct Bonus {
     position: Point,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Bonus2 {
+    bonus: BonusType,
+    problem: usize,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Problem {
     bonuses: Vec<Bonus>,
@@ -193,8 +199,9 @@ struct Problem {
 #[derive(Serialize, Deserialize, Clone)]
 struct Pose {
     vertices: Vec<Point>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bonus: Option<BonusType>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
+    bonuses: Vec<Bonus2>,
 }
 
 impl Pose {
@@ -349,6 +356,43 @@ impl NearestCache {
     }
 }
 
+fn cost_edge_length(
+    pose: &Pose,
+    prob: &Problem,
+    cache: &NearestCache,
+    scale: f64,
+    weight: f64,
+) -> f64 {
+    let mut result = 0.0;
+    let use_superflex = if let Some(bonus) = pose.bonuses.first() {
+        if bonus.bonus == BonusType::SUPERFLEX {
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    let mut max_diff = 0;
+    for &(u, v) in &prob.figure.edges {
+        let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]);
+        let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]);
+        let diff = max(
+            0,
+            1_000_000 * (pose_len - orig_len).abs() - prob.epsilon * orig_len,
+        );
+        if diff == 0 {
+            continue;
+        }
+        max_diff = max(max_diff, diff);
+        result += diff as f64 * scale / weight;
+    }
+    if use_superflex {
+        result -= max_diff as f64 * scale / weight;
+    }
+    result
+}
+
 fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64) -> f64 {
     let mut max_xy = 0;
     for &p in &prob.hole {
@@ -358,47 +402,30 @@ fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64
     let scale = (max_xy * max_xy) as f64;
 
     let mut result = 0.0;
-    if pose.bonus == Some(BonusType::GLOBALIST) {
-        let mut sum = 0.0;
-        for &(u, v) in &prob.figure.edges {
-            let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]) as f64;
-            let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]) as f64;
-            sum += 1e6 * (pose_len / orig_len - 1.0).abs();
-        }
-        sum -= (prob.figure.edges.len() * prob.epsilon as usize) as f64;
-        result += sum.max(0.0) * scale / weight;
-    } else {
-        let mut max_diff = 0;
-        for &(u, v) in &prob.figure.edges {
-            let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]);
-            let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]);
-            let diff = max(
-                0,
-                1_000_000 * (pose_len - orig_len).abs() - prob.epsilon * orig_len,
-            );
-            if diff == 0 {
-                continue;
+    if let Some(bonus) = pose.bonuses.first() {
+        if bonus.bonus == BonusType::GLOBALIST {
+            let mut sum = 0.0;
+            for &(u, v) in &prob.figure.edges {
+                let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]) as f64;
+                let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]) as f64;
+                sum += 1e6 * (pose_len / orig_len - 1.0).abs();
             }
-            max_diff = max(max_diff, diff);
-            result += diff as f64 * scale / weight;
+            sum -= (prob.figure.edges.len() * prob.epsilon as usize) as f64;
+            result += sum.max(0.0) * scale / weight;
+        } else {
+            result += cost_edge_length(pose, prob, cache, scale, weight);
         }
-        if pose.bonus == Some(BonusType::SUPERFLEX) {
-            result -= max_diff as f64 * scale / weight;
-        }
+    } else {
+        result += cost_edge_length(pose, prob, cache, scale, weight);
     }
     result += cache.sum() as f64;
     let bonuses = WANT_BONUS.get().unwrap();
     for bonus in bonuses {
-        if bonus.problem != 7 {
-            continue;
+        let mut min_d = 1_000_000_000_000_000_000;
+        for &p in &pose.vertices {
+            min_d = min(min_d, bonus.position.distance_sq(p));
         }
-        if bonus.bonus == BonusType::SUPERFLEX {
-            let mut min_d = 1_000_000_000_000_000_000;
-            for &p in &pose.vertices {
-                min_d = min(min_d, bonus.position.distance_sq(p));
-            }
-            result += (min_d * 1_000) as f64;
-        }
+        result += (min_d * 1_000) as f64;
     }
     result
 }
@@ -766,7 +793,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
         }
 
         let pose = Pose {
-            bonus: *USE_BONUS.get().unwrap(),
+            bonuses: USE_BONUS.get().unwrap().clone(),
             vertices,
         };
         let cache = NearestCache::new(&pose, prob);
@@ -779,7 +806,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     match current_pose {
         Some(pose) => pose,
         None => Pose {
-            bonus: *USE_BONUS.get().unwrap(),
+            bonuses: USE_BONUS.get().unwrap().clone(),
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
@@ -815,7 +842,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
             *v = *points.choose(rng).unwrap();
         }
         let pose = Pose {
-            bonus: *USE_BONUS.get().unwrap(),
+            bonuses: USE_BONUS.get().unwrap().clone(),
             vertices: vertices.clone(),
         };
         let cache = NearestCache::new(&pose, prob);
@@ -828,7 +855,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
     match current_pose {
         Some(pose) => pose,
         None => Pose {
-            bonus: *USE_BONUS.get().unwrap(),
+            bonuses: USE_BONUS.get().unwrap().clone(),
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
@@ -837,7 +864,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
 fn gen_random_pose_mk3(prob: &Problem, rng: &mut SmallRng, verbose: bool, scale: f64) -> Pose {
     let points = in_hole_points(prob);
     let mut initial_pose = Pose {
-        bonus: *USE_BONUS.get().unwrap(),
+        bonuses: USE_BONUS.get().unwrap().clone(),
         vertices: prob.figure.vertices.clone(),
     };
     let mut max_x = 0;
@@ -1021,7 +1048,7 @@ fn improve(
             rem_verts.push(idx);
         }
     }
-    let loop_count = 3000;
+    let loop_count = 1000000;
     for i in 0..loop_count {
         if i % 10000 == 9999 {
             eprintln!("{} {}", i, old_cost);
@@ -1033,8 +1060,8 @@ fn improve(
             .min(rem_verts.len() as f64) as usize;
         for &idx in rem_verts.choose_multiple(rng, size) {
             if rng.gen::<f64>() < 0.5 {
-                let dx = Normal::new(0.0, 1.0).unwrap().sample(rng) as i64;
-                let dy = Normal::new(0.0, 1.0).unwrap().sample(rng) as i64;
+                let dx = Normal::new(0.0, 2.0).unwrap().sample(rng) as i64;
+                let dy = Normal::new(0.0, 2.0).unwrap().sample(rng) as i64;
 
                 new_pose.vertices[idx].0 += dx;
                 new_pose.vertices[idx].1 += dy;
@@ -1057,7 +1084,7 @@ fn improve(
             continue;
         }
 
-        let scale = 3e8 * (1.03 - (i as f64 / loop_count as f64).sqrt());
+        let scale = 1e12 * (1.03 - (i as f64 / loop_count as f64).sqrt());
         if rng.gen::<f64>() < ((old_cost - new_cost) / scale).exp() {
             pose = new_pose;
             old_cost = new_cost;
@@ -1095,7 +1122,7 @@ fn dfs(
             vertices[fidx.unwrap()] = prob.hole[hidx];
         }
         let pose = Pose {
-            bonus: *USE_BONUS.get().unwrap(),
+            bonuses: USE_BONUS.get().unwrap().clone(),
             vertices,
         };
         improve(pose, prob, matching, matching_rev, rng, verbose)
@@ -1226,7 +1253,7 @@ fn solve_for_zero(prob: &Problem, verbose: bool, _loop_count: usize) -> Pose {
     ) {
         Some(pose) => pose,
         None => Pose {
-            bonus: *USE_BONUS.get().unwrap(),
+            bonuses: USE_BONUS.get().unwrap().clone(),
             vertices: vec![*hv.first().unwrap(); n],
         },
     }
@@ -1236,28 +1263,38 @@ fn dislike(pose: &Pose, prob: &Problem) -> u64 {
     if !pose.is_in_hole(&prob.figure.edges, &prob.hole) {
         return 1_000_000_000_000_000_000;
     }
-    if pose.bonus == Some(BonusType::GLOBALIST) {
-        let mut sum = 0.0;
-        for &(u, v) in &prob.figure.edges {
-            let orig_len =
-                Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length() as f64;
-            let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length() as f64;
-            sum += (pose_len / orig_len - 1.0).abs().max(0.0);
-        }
-        if 1e6 * sum > (prob.figure.edges.len() * prob.epsilon as usize) as f64 {
-            return 1_000_000_000_000_000_000;
+    if let Some(bonus) = pose.bonuses.first() {
+        if bonus.bonus == BonusType::GLOBALIST {
+            let mut sum = 0.0;
+            for &(u, v) in &prob.figure.edges {
+                let orig_len =
+                    Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length() as f64;
+                let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length() as f64;
+                sum += (pose_len / orig_len - 1.0).abs().max(0.0);
+            }
+            if 1e6 * sum > (prob.figure.edges.len() * prob.epsilon as usize) as f64 {
+                return 1_000_000_000_000_000_000;
+            }
+        } else {
+            let mut count = 0;
+            for &(u, v) in &prob.figure.edges {
+                let orig_len = Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length();
+                let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length();
+                if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon * orig_len {
+                    if count > 0 || bonus.bonus != BonusType::SUPERFLEX {
+                        return 1_000_000_000_000_000_000;
+                    } else {
+                        count += 1;
+                    }
+                }
+            }
         }
     } else {
-        let mut count = 0;
         for &(u, v) in &prob.figure.edges {
             let orig_len = Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length();
             let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length();
             if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon * orig_len {
-                if count > 0 || pose.bonus != Some(BonusType::SUPERFLEX) {
-                    return 1_000_000_000_000_000_000;
-                } else {
-                    count += 1;
-                }
+                return 1_000_000_000_000_000_000;
             }
         }
     }
@@ -1293,11 +1330,10 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
     let zero_desired = matches.is_present("zero");
     USE_BONUS
         .set(match matches.value_of("use-bonus") {
-            Some(s) => Some(serde_json::from_str(&format!("{:?}", s)).unwrap()),
-            None => None,
+            Some(s) => vec![serde_json::from_str(s).unwrap()],
+            None => Vec::new(),
         })
         .unwrap();
-    let want_superflex = matches.is_present("want-superflex");
     let verbose = match matches.value_of("loglevel") {
         Some(level) => level.parse::<i32>().unwrap() > 1,
         None => false,
@@ -1309,11 +1345,14 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
     };
 
     let prob = parse_problem(&input_file)?;
-    if want_superflex {
+    if let Some(want_bonuses) = matches.values_of("want-bonus") {
         let mut wants = Vec::new();
-        for bonus in &prob.bonuses {
-            if bonus.bonus == BonusType::SUPERFLEX {
-                wants.push(bonus.clone());
+        for want in want_bonuses {
+            let id: usize = want.parse().unwrap();
+            for bonus in &prob.bonuses {
+                if bonus.problem == id {
+                    wants.push(bonus.clone());
+                }
             }
         }
         WANT_BONUS.set(wants).unwrap();
@@ -1327,7 +1366,7 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
         solve(&prob, verbose, loop_count)
     };
 
-    answer.bonus = USE_BONUS.get().unwrap().clone();
+    answer.bonuses = USE_BONUS.get().unwrap().clone();
 
     println!("{}", dislike(&answer, &prob));
 
@@ -1341,14 +1380,14 @@ fn command_score(matches: &ArgMatches) -> std::io::Result<()> {
     let prob_file = matches.value_of("problem").unwrap();
     let ans_file = matches.value_of("answer").unwrap();
     let use_bonus = match matches.value_of("use-bonus") {
-        Some(s) => Some(serde_json::from_str(&format!("{:?}", s)).unwrap()),
-        None => None,
+        Some(s) => vec![serde_json::from_str(s).unwrap()],
+        None => Vec::new(),
     };
 
     let prob = parse_problem(&prob_file)?;
     let mut answer = parse_pose(&ans_file)?;
     // FIXME: check bonus can be used
-    answer.bonus = use_bonus;
+    answer.bonuses = use_bonus;
 
     println!("{}", dislike(&answer, &prob));
     Ok(())
@@ -1384,7 +1423,12 @@ fn main() -> std::io::Result<()> {
                 .arg(Arg::with_name("loglevel").short("l").takes_value(true))
                 .arg(Arg::with_name("zero").short("z"))
                 .arg(Arg::with_name("use-bonus").short("u").takes_value(true))
-                .arg(Arg::with_name("want-superflex").short("w"))
+                .arg(
+                    Arg::with_name("want-bonus")
+                        .short("w")
+                        .takes_value(true)
+                        .multiple(true),
+                )
                 .arg(Arg::with_name("loop-count").short("n").takes_value(true)),
         )
         .subcommand(
