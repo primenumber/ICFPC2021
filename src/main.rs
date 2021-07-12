@@ -167,7 +167,7 @@ struct Figure {
     edges: Vec<(usize, usize)>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum BonusType {
     GLOBALIST,
     BREAK_A_LEG,
@@ -372,7 +372,7 @@ fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64
         max_diff = max(max_diff, diff);
         result += diff as f64 * scale / weight;
     }
-    if *USE_BONUS.get().unwrap() == Some(BonusType::SUPERFLEX) {
+    if pose.bonus == Some(BonusType::SUPERFLEX) {
         result -= max_diff as f64 * scale / weight;
     }
     result += cache.sum() as f64;
@@ -1064,7 +1064,7 @@ fn dfs(
             vertices[fidx.unwrap()] = prob.hole[hidx];
         }
         let pose = Pose {
-            bonus: None,
+            bonus: *USE_BONUS.get().unwrap(),
             vertices,
         };
         improve(pose, prob, matching, matching_rev, rng)
@@ -1200,11 +1200,29 @@ fn dislike(pose: &Pose, prob: &Problem) -> u64 {
     if !pose.is_in_hole(&prob.figure.edges, &prob.hole) {
         return 1_000_000_000_000_000_000;
     }
-    for &(u, v) in &prob.figure.edges {
-        let orig_len = Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length();
-        let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length();
-        if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon * orig_len {
+    if pose.bonus == Some(BonusType::GLOBALIST) {
+        let mut sum = 0.0;
+        for &(u, v) in &prob.figure.edges {
+            let orig_len =
+                Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length() as f64;
+            let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length() as f64;
+            sum += (pose_len / orig_len - 1.0).abs().max(0.0);
+        }
+        if 1e6 * sum > (prob.figure.edges.len() * prob.epsilon as usize) as f64 {
             return 1_000_000_000_000_000_000;
+        }
+    } else {
+        let mut count = 0;
+        for &(u, v) in &prob.figure.edges {
+            let orig_len = Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length();
+            let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length();
+            if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon * orig_len {
+                if count > 0 || pose.bonus != Some(BonusType::SUPERFLEX) {
+                    return 1_000_000_000_000_000_000;
+                } else {
+                    count += 1;
+                }
+            }
         }
     }
     let mut result = 0;
