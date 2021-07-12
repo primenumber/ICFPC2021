@@ -991,11 +991,14 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
 fn improve(
     mut pose: Pose,
     prob: &Problem,
-    _matching: &[Option<usize>],
+    matching: &[Option<usize>],
     matching_rev: &[Option<usize>],
     rng: &mut SmallRng,
+    verbose: bool,
 ) -> Option<Pose> {
-    //eprintln!("Start improve process: {:?}", matching);
+    if verbose {
+        eprintln!("Start improve process: {:?}", matching);
+    }
     let cache = NearestCache::new(&pose, prob);
     let mut old_cost = cost_unchecked(&pose, prob, &cache, 1e0);
     if old_cost == 0.0 {
@@ -1061,6 +1064,7 @@ fn dfs(
     matching: &mut [Option<usize>],
     matching_rev: &mut [Option<usize>],
     rng: &mut SmallRng,
+    verbose: bool,
 ) -> Option<Pose> {
     let m = prob.hole.len();
     let n = prob.figure.vertices.len();
@@ -1083,7 +1087,7 @@ fn dfs(
             bonus: *USE_BONUS.get().unwrap(),
             vertices,
         };
-        improve(pose, prob, matching, matching_rev, rng)
+        improve(pose, prob, matching, matching_rev, rng, verbose)
     } else {
         for j in 0..n {
             if matching_rev[j] != None {
@@ -1143,6 +1147,7 @@ fn dfs(
                 matching,
                 matching_rev,
                 rng,
+                verbose,
             ) {
                 Some(pose) => return Some(pose),
                 None => (),
@@ -1154,13 +1159,16 @@ fn dfs(
     }
 }
 
-fn solve_for_zero(prob: &Problem, _verbose: bool, _loop_count: usize) -> Pose {
+fn solve_for_zero(prob: &Problem, verbose: bool, _loop_count: usize) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
     let hv = &prob.hole;
     let fv = &prob.figure.vertices;
     let fe = &prob.figure.edges;
     let n = fv.len();
     let m = hv.len();
+    if verbose {
+        eprintln!("To solve for zero, N={}, M={}", n, m);
+    }
     let mut matrix = vec![vec![f64::INFINITY; n]; n];
     for &(u, v) in fe {
         let max_dist =
@@ -1203,6 +1211,7 @@ fn solve_for_zero(prob: &Problem, _verbose: bool, _loop_count: usize) -> Pose {
         &mut matching,
         &mut matching_rev,
         &mut small_rng,
+        verbose,
     ) {
         Some(pose) => pose,
         None => Pose {
