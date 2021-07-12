@@ -8,14 +8,22 @@ $PATH = "target/release/icfpc2021"
 
 $RANGE = 1..132
 
+def touch(id)
+  `touch flags/#{id}.flag`
+end
+
 def post_answer(id)
   path = calculate_best(id)[1]
   return if path == nil
-  data = File::open(path).read
+  f = File.open(path)
+  return if f.mtime <= File::mtime("flags/#{id}.flag")
+  puts "Updated: #{id}"
+  data = f.read
   url = URI.parse("#{$ENDPOINT}/api/problems/#{id}/solutions")
   http = Net::HTTP.new(url.host, url.port)
   http.use_ssl = true
   response = http.post(url.request_uri, data, header = { 'Authorization': "Bearer #{$TOKEN}" })
+  touch(id)
   response.body
 end
 
@@ -77,19 +85,25 @@ when "solve" then
   end
 when "post" then
   if ARGV[1] == nil then
-    $RANGE.each {|i|
+    Parallel.each($RANGE) {|i|
       puts i, post_answer(i)
     }
   else
     puts post_answer(ARGV[1].to_i)
   end
 when "best" then
-  $RANGE.each {|i|
+  Parallel.map($RANGE) {|i|
     score, path = calculate_best(i)
     if path != nil then
-      puts "#{i} #{score} #{path}"
+      "#{i} #{score} #{path}"
     else
-      puts "#{i} Not solved"
+      "#{i} Not solved"
     end
+  }.each {|s|
+    puts s
+  }
+when "touch" then
+  $RANGE.each {|i|
+    touch(i)
   }
 end
