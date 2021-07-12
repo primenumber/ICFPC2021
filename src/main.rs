@@ -4,7 +4,7 @@ use rand::distributions::{Distribution, Uniform};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
-use rand_distr::{Binomial, Normal};
+use rand_distr::{Binomial, Exp, Normal};
 use serde::{Deserialize, Serialize};
 use std::cmp::{max, min};
 use std::collections::VecDeque;
@@ -1001,7 +1001,11 @@ fn improve(
             eprintln!("{} {}", i, old_cost);
         }
         let mut new_pose = pose.clone();
-        for &idx in &rem_verts {
+        let size = Exp::new(1.0f64)
+            .unwrap()
+            .sample(rng)
+            .min(rem_verts.len() as f64) as usize;
+        for &idx in rem_verts.choose_multiple(rng, size) {
             if rng.gen::<f64>() < 0.5 {
                 let dx = Normal::new(0.0, 1.0).unwrap().sample(rng) as i64;
                 let dy = Normal::new(0.0, 1.0).unwrap().sample(rng) as i64;
