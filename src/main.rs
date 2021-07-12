@@ -159,7 +159,7 @@ struct Figure {
     edges: Vec<(usize, usize)>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 enum BonusType {
     GLOBALIST,
     BREAK_A_LEG,
@@ -167,7 +167,7 @@ enum BonusType {
     SUPERFLEX,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct Bonus {
     bonus: BonusType,
     problem: usize,
@@ -179,12 +179,14 @@ struct Problem {
     bonuses: Vec<Bonus>,
     hole: Vec<Point>,
     figure: Figure,
-    epsilon: u32,
+    epsilon: i64,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 struct Pose {
     vertices: Vec<Point>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bonus: Option<BonusType>,
 }
 
 impl Pose {
@@ -718,7 +720,10 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
             vertices[j] = prob.hole[i];
         }
 
-        let pose = Pose { vertices };
+        let pose = Pose {
+            bonus: None,
+            vertices,
+        };
         let cache = NearestCache::new(&pose, prob);
         let c = cost(&pose, prob, &cache, 1e4);
         if c < min_cost && pose.is_in_hole(&prob.figure.edges, &prob.hole) {
@@ -729,6 +734,7 @@ fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     match current_pose {
         Some(pose) => pose,
         None => Pose {
+            bonus: None,
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
@@ -763,6 +769,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
             *v = *points.choose(rng).unwrap();
         }
         let pose = Pose {
+            bonus: None,
             vertices: vertices.clone(),
         };
         let cache = NearestCache::new(&pose, prob);
@@ -775,6 +782,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
     match current_pose {
         Some(pose) => pose,
         None => Pose {
+            bonus: None,
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
@@ -951,7 +959,10 @@ fn dfs(
         for (hidx, fidx) in matching.iter().enumerate() {
             vertices[fidx.unwrap()] = prob.hole[hidx];
         }
-        let pose = Pose { vertices };
+        let pose = Pose {
+            bonus: None,
+            vertices,
+        };
         improve(pose, prob, matching, matching_rev, rng)
     } else {
         for j in 0..n {
@@ -1075,6 +1086,7 @@ fn solve_for_zero(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     ) {
         Some(pose) => pose,
         None => Pose {
+            bonus: None,
             vertices: vec![*hv.first().unwrap(); n],
         },
     }
@@ -1101,6 +1113,18 @@ fn dislike(pose: &Pose, prob: &Problem) -> u64 {
             });
         }
         result += min_d.unwrap() as u64;
+    }
+    result
+}
+
+fn check_bonuses(pose: &Pose, prob: &Problem) -> Vec<Bonus> {
+    let mut result = Vec::new();
+    for bonus in &prob.bonuses {
+        for &p in &pose.vertices {
+            if p == bonus.position {
+                result.push(bonus.clone());
+            }
+        }
     }
     result
 }
@@ -1146,6 +1170,17 @@ fn command_score(matches: &ArgMatches) -> std::io::Result<()> {
     Ok(())
 }
 
+fn command_check_bonuses(matches: &ArgMatches) -> std::io::Result<()> {
+    let prob_file = matches.value_of("problem").unwrap();
+    let ans_file = matches.value_of("answer").unwrap();
+
+    let prob = parse_problem(&prob_file)?;
+    let answer = parse_pose(&ans_file)?;
+
+    println!("{:?}", check_bonuses(&answer, &prob));
+    Ok(())
+}
+
 fn main() -> std::io::Result<()> {
     let matches = App::new("ICFPC2021")
         .subcommand(
@@ -1181,11 +1216,27 @@ fn main() -> std::io::Result<()> {
                         .takes_value(true),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("check-bonuses")
+                .arg(
+                    Arg::with_name("problem")
+                        .short("p")
+                        .required(true)
+                        .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("answer")
+                        .short("a")
+                        .required(true)
+                        .takes_value(true),
+                ),
+        )
         .get_matches();
 
     match matches.subcommand() {
         ("solve", Some(matches)) => command_solve(matches),
         ("score", Some(matches)) => command_score(matches),
+        ("check-bonuses", Some(matches)) => command_check_bonuses(matches),
         _ => {
             eprintln!("Unknown subcommand");
             Ok(())
