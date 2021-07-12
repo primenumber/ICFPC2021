@@ -1,4 +1,5 @@
 use clap::{App, Arg, ArgMatches, SubCommand};
+use once_cell::sync::OnceCell;
 use rand::distributions::{Distribution, Uniform};
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
@@ -14,6 +15,9 @@ use std::mem;
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy, Deserialize, Serialize)]
 struct Point(i64, i64);
+
+static USE_BONUS: OnceCell<Option<BonusType>> = OnceCell::new();
+static WANT_BONUS: OnceCell<Vec<Bonus>> = OnceCell::new();
 
 impl Point {
     fn dot(&self, rhs: Point) -> i64 {
@@ -268,8 +272,8 @@ struct NearestCache {
 
 impl NearestCache {
     fn new(pose: &Pose, prob: &Problem) -> NearestCache {
-        let mut nearest_id = Vec::new();
-        let mut nearest_distance = Vec::new();
+        let mut nearest_id = Vec::with_capacity(prob.hole.len());
+        let mut nearest_distance = Vec::with_capacity(prob.hole.len());
         for &p in &prob.hole {
             let mut min_d = 1_000_000_000_000_000_000;
             let mut min_id = 0;
@@ -295,6 +299,22 @@ impl NearestCache {
             sum += d;
         }
         sum
+    }
+
+    fn update_all(&mut self, pose: &Pose, prob: &Problem) {
+        for (idx, &p) in prob.hole.iter().enumerate() {
+            let mut min_d = 1_000_000_000_000_000_000;
+            let mut min_id = 0;
+            for (idx, &q) in pose.vertices.iter().enumerate() {
+                let d = p.distance_sq(q);
+                if d < min_d {
+                    min_d = d;
+                    min_id = idx;
+                }
+            }
+            self.nearest_id[idx] = min_id;
+            self.nearest_distance[idx] = min_d;
+        }
     }
 
     fn update(&mut self, pose: &Pose, prob: &Problem, updated_id: usize) {
@@ -334,19 +354,37 @@ fn cost_unchecked(pose: &Pose, prob: &Problem, cache: &NearestCache, weight: f64
     let scale = (max_xy * max_xy) as f64;
 
     let mut result = 0.0;
+    let mut max_diff = 0;
     for &(u, v) in &prob.figure.edges {
         let orig_len = prob.figure.vertices[u].distance_sq(prob.figure.vertices[v]);
         let pose_len = pose.vertices[u].distance_sq(pose.vertices[v]);
         let diff = max(
             0,
-            1_000_000 * (pose_len - orig_len).abs() - prob.epsilon as i64 * orig_len,
+            1_000_000 * (pose_len - orig_len).abs() - prob.epsilon * orig_len,
         );
         if diff == 0 {
             continue;
         }
+        max_diff = max(max_diff, diff);
         result += diff as f64 * scale / weight;
     }
+    if *USE_BONUS.get().unwrap() == Some(BonusType::SUPERFLEX) {
+        result -= max_diff as f64 * scale / weight;
+    }
     result += cache.sum() as f64;
+    let bonuses = WANT_BONUS.get().unwrap();
+    for bonus in bonuses {
+        if bonus.problem != 7 {
+            continue;
+        }
+        if bonus.bonus == BonusType::SUPERFLEX {
+            let mut min_d = 1_000_000_000_000_000_000;
+            for &p in &pose.vertices {
+                min_d = min(min_d, bonus.position.distance_sq(p));
+            }
+            result += (min_d * 1_000) as f64;
+        }
+    }
     result
 }
 
@@ -394,22 +432,15 @@ fn move_one_mk2(
     temp: f64,
     cache: &mut NearestCache,
     points: &[Point],
+    neighbors: &[Vec<usize>],
 ) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let idx = Uniform::from(0..pose.vertices.len()).sample(rng);
-    let mut neighbors = Vec::new();
-    for &(u, v) in &prob.figure.edges {
-        if u == idx {
-            neighbors.push(v);
-        } else if v == idx {
-            neighbors.push(u);
-        }
-    }
     let mut candidates = Vec::new();
     let fv = &prob.figure.vertices;
     for &p in points {
         let mut ok = true;
-        for &ng in &neighbors {
+        for &ng in &neighbors[idx] {
             let q = pose.vertices[ng];
             let d = p.distance_sq(q);
             let orig_d = fv[idx].distance_sq(fv[ng]);
@@ -453,16 +484,12 @@ fn flip_one(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
+    neighbors: &[Vec<usize>],
 ) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
-    let mut degrees = vec![0; pose.vertices.len()];
-    for &(u, v) in &prob.figure.edges {
-        degrees[u] += 1;
-        degrees[v] += 1;
-    }
     let mut flippables = Vec::new();
     for idx in 0..pose.vertices.len() {
-        if degrees[idx] == 2 {
+        if neighbors[idx].len() == 2 {
             flippables.push(idx);
         }
     }
@@ -470,17 +497,11 @@ fn flip_one(
         return false;
     }
     let idx = flippables[Uniform::from(0..flippables.len()).sample(rng)];
-    let mut neighbors = Vec::new();
-    for &(u, v) in &prob.figure.edges {
-        if u == idx {
-            neighbors.push(v);
-        } else if v == idx {
-            neighbors.push(u);
-        }
-    }
-    assert!(neighbors.len() == 2);
 
-    let line = Segment(pose.vertices[neighbors[0]], pose.vertices[neighbors[1]]);
+    let line = Segment(
+        pose.vertices[neighbors[idx][0]],
+        pose.vertices[neighbors[idx][1]],
+    );
     let p = pose.vertices[idx];
     pose.vertices[idx] = line.mirror(p);
 
@@ -585,21 +606,14 @@ fn move_several(
     rng: &mut SmallRng,
     temp: f64,
     cache: &mut NearestCache,
+    neighbors: &[Vec<usize>],
 ) -> bool {
     let old_cost = cost_unchecked(pose, prob, cache, temp);
     let size = Uniform::from(2..=pose.vertices.len()).sample(rng);
     let sink = Uniform::from(0..pose.vertices.len()).sample(rng);
-    let mut neighbors = vec![Vec::new(); pose.vertices.len()];
-    for &(u, v) in &prob.figure.edges {
-        neighbors[u].push(v);
-        neighbors[v].push(u);
-    }
-    for ng in &mut neighbors {
-        ng.shuffle(rng);
-    }
     let mut visited = vec![false; pose.vertices.len()];
-    let mut uses = Vec::new();
-    let mut queue = VecDeque::new();
+    let mut uses = Vec::with_capacity(size);
+    let mut queue = VecDeque::with_capacity(size);
     queue.push_back(sink);
     while !queue.is_empty() {
         let i = queue.pop_front().unwrap();
@@ -607,7 +621,7 @@ fn move_several(
         if uses.len() == size {
             break;
         }
-        for &to in &neighbors[i] {
+        for &to in neighbors[i].choose_multiple(rng, neighbors[i].len()) {
             if visited[to] {
                 continue;
             }
@@ -623,7 +637,7 @@ fn move_several(
         let p = pose.vertices[idx];
         pose.vertices[idx] = Point(p.0 + dx, p.1 + dy);
     }
-    *cache = NearestCache::new(pose, prob);
+    cache.update_all(pose, prob);
     let new_cost = cost(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return true;
@@ -633,7 +647,7 @@ fn move_several(
             let p = pose.vertices[idx];
             pose.vertices[idx] = Point(p.0 - dx, p.1 - dy);
         }
-        *cache = NearestCache::new(pose, prob);
+        cache.update_all(pose, prob);
     }
     false
 }
@@ -651,7 +665,7 @@ fn move_all(
     for p in &mut pose.vertices {
         *p = Point(p.0 + dx, p.1 + dy);
     }
-    *cache = NearestCache::new(pose, prob);
+    cache.update_all(pose, prob);
     let new_cost = cost(pose, prob, cache, temp);
     if new_cost <= old_cost {
         return true;
@@ -660,7 +674,7 @@ fn move_all(
         for p in &mut pose.vertices {
             *p = Point(p.0 - dx, p.1 - dy);
         }
-        *cache = NearestCache::new(pose, prob);
+        cache.update_all(pose, prob);
     }
     false
 }
@@ -707,6 +721,7 @@ fn rotate_all(
     false
 }
 
+#[allow(dead_code)]
 fn gen_random_pose(prob: &Problem, rng: &mut SmallRng) -> Pose {
     let mut perm: Vec<_> = (0..prob.figure.vertices.len()).collect();
     let mut min_cost = 1e12;
@@ -764,7 +779,7 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
     let mut vertices = vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()];
     let mut min_cost = 1e12;
     let mut current_pose = None;
-    for _i in 0..1000 {
+    for _i in 0..10000 {
         for v in &mut vertices {
             *v = *points.choose(rng).unwrap();
         }
@@ -788,6 +803,73 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
     }
 }
 
+fn negibor_list(prob: &Problem) -> Vec<Vec<usize>> {
+    let mut result = vec![Vec::new(); prob.figure.vertices.len()];
+    for &(u, v) in &prob.figure.edges {
+        result[u].push(v);
+        result[v].push(u);
+    }
+    result
+}
+
+#[derive(Debug)]
+struct ImproveCounter {
+    rorate_all: usize,
+    move_all: usize,
+    move_several: usize,
+    flip_one: usize,
+    move_one: usize,
+    move_one_mk2: usize,
+    move_two: usize,
+    rotate_two: usize,
+}
+
+fn improve_process(
+    pose: &mut Pose,
+    prob: &Problem,
+    rng: &mut SmallRng,
+    temp: f64,
+    cache: &mut NearestCache,
+    points: &[Point],
+    neighbors: &[Vec<usize>],
+    counter: &mut ImproveCounter,
+) {
+    let rem = Uniform::from(0..64).sample(rng);
+    if rem <= 3 {
+        if rotate_all(pose, prob, rng, temp, cache) {
+            counter.rorate_all += 1;
+        }
+    } else if rem <= 7 {
+        if move_all(pose, prob, rng, temp, cache) {
+            counter.move_all += 1;
+        }
+    } else if rem <= 11 {
+        if move_several(pose, prob, rng, temp, cache, neighbors) {
+            counter.move_several += 1;
+        }
+    } else if rem <= 15 {
+        if flip_one(pose, prob, rng, temp, cache, neighbors) {
+            counter.flip_one += 1;
+        }
+    } else if rem <= 31 {
+        if move_one(pose, prob, rng, temp, cache) {
+            counter.move_one += 1;
+        }
+    } else if rem <= 33 {
+        if move_one_mk2(pose, prob, rng, temp, cache, points, neighbors) {
+            counter.move_one_mk2 += 1;
+        }
+    } else if rem <= 47 {
+        if move_two(pose, prob, rng, temp, cache) {
+            counter.move_two += 1;
+        }
+    } else {
+        if rotate_two(pose, prob, rng, temp, cache) {
+            counter.rotate_two += 1;
+        }
+    }
+}
+
 fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
 
@@ -796,20 +878,23 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
         return pose;
     }
 
-    let start_temp: f64 = 1e4;
+    let start_temp: f64 = 1e6;
     let end_temp: f64 = 3e-2;
 
-    let mut improve_rorate_all = 0;
-    let mut improve_move_all = 0;
-    let mut improve_move_several = 0;
-    let mut improve_flip_one = 0;
-    let mut improve_move_one = 0;
-    let mut improve_move_one_mk2 = 0;
-    let mut improve_move_two = 0;
-    let mut improve_rotate_two = 0;
+    let mut counter = ImproveCounter {
+        rorate_all: 0,
+        move_all: 0,
+        move_several: 0,
+        flip_one: 0,
+        move_one: 0,
+        move_one_mk2: 0,
+        move_two: 0,
+        rotate_two: 0,
+    };
 
     let mut cache = NearestCache::new(&pose, prob);
     let points = in_hole_points(prob);
+    let neighbors = negibor_list(prob);
     for i in 0..loop_count {
         let ratio = i as f64 / loop_count as f64;
         let temp = (ratio * end_temp.ln() + (1.0 - ratio) * start_temp.ln()).exp();
@@ -821,51 +906,19 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
                 serde_json::to_string(&pose).unwrap()
             );
         }
-        let rem = Uniform::from(0..64).sample(&mut small_rng);
-        if rem <= 3 {
-            if rotate_all(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_rorate_all += 1;
-            }
-        } else if rem <= 7 {
-            if move_all(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_move_all += 1;
-            }
-        } else if rem <= 11 {
-            if move_several(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_move_several += 1;
-            }
-        } else if rem <= 15 {
-            if flip_one(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_flip_one += 1;
-            }
-        } else if rem <= 31 {
-            if move_one(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_move_one += 1;
-            }
-        } else if rem <= 33 {
-            if move_one_mk2(&mut pose, prob, &mut small_rng, temp, &mut cache, &points) {
-                improve_move_one_mk2 += 1;
-            }
-        } else if rem <= 47 {
-            if move_two(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_move_two += 1;
-            }
-        } else {
-            if rotate_two(&mut pose, prob, &mut small_rng, temp, &mut cache) {
-                improve_rotate_two += 1;
-            }
-        }
+        improve_process(
+            &mut pose,
+            prob,
+            &mut small_rng,
+            temp,
+            &mut cache,
+            &points,
+            &neighbors,
+            &mut counter,
+        );
     }
     if verbose {
-        eprintln!("[Stats]");
-        eprintln!(
-            "rotall: {}, movall: {}, movsev: {}, flipone: {}",
-            improve_rorate_all, improve_move_all, improve_move_several, improve_flip_one
-        );
-        eprintln!(
-            "movone: {}, movone_mk2: {}, movtwo: {}, rottwo: {}",
-            improve_move_one, improve_move_one_mk2, improve_move_two, improve_rotate_two
-        );
+        eprintln!("[Stats] {:?}", counter);
     }
     pose
 }
@@ -873,12 +926,12 @@ fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
 fn improve(
     mut pose: Pose,
     prob: &Problem,
-    matching: &[Option<usize>],
+    _matching: &[Option<usize>],
     matching_rev: &[Option<usize>],
     rng: &mut SmallRng,
 ) -> Option<Pose> {
     //eprintln!("Start improve process: {:?}", matching);
-    let mut cache = NearestCache::new(&pose, prob);
+    let cache = NearestCache::new(&pose, prob);
     let mut old_cost = cost_unchecked(&pose, prob, &cache, 1e0);
     if old_cost == 0.0 {
         return Some(pose);
@@ -914,7 +967,6 @@ fn improve(
         let new_cost = cost_unchecked(&new_pose, prob, &new_cache, 1e0);
         if new_cost <= old_cost {
             pose = new_pose;
-            cache = new_cache;
             old_cost = new_cost;
             if new_cost == 0.0 {
                 return Some(pose);
@@ -925,7 +977,6 @@ fn improve(
         let scale = 3e8 * (1.03 - (i as f64 / loop_count as f64).sqrt());
         if rng.gen::<f64>() < ((old_cost - new_cost) / scale).exp() {
             pose = new_pose;
-            cache = new_cache;
             old_cost = new_cost;
             continue;
         }
@@ -1034,7 +1085,7 @@ fn dfs(
     }
 }
 
-fn solve_for_zero(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
+fn solve_for_zero(prob: &Problem, _verbose: bool, _loop_count: usize) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
     let hv = &prob.hole;
     let fv = &prob.figure.vertices;
@@ -1099,7 +1150,7 @@ fn dislike(pose: &Pose, prob: &Problem) -> u64 {
     for &(u, v) in &prob.figure.edges {
         let orig_len = Segment(prob.figure.vertices[u], prob.figure.vertices[v]).length();
         let pose_len = Segment(pose.vertices[u], pose.vertices[v]).length();
-        if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon as i64 * orig_len {
+        if 1_000_000 * (pose_len - orig_len).abs() > prob.epsilon * orig_len {
             return 1_000_000_000_000_000_000;
         }
     }
@@ -1133,23 +1184,43 @@ fn command_solve(matches: &ArgMatches) -> std::io::Result<()> {
     let input_file = matches.value_of("problem").unwrap();
     let output_file = matches.value_of("answer").unwrap();
     let zero_desired = matches.is_present("zero");
+    let use_superflex = matches.is_present("superflex");
+    if use_superflex {
+        USE_BONUS.set(Some(BonusType::SUPERFLEX)).unwrap();
+    } else {
+        USE_BONUS.set(None).unwrap();
+    }
+    let want_superflex = matches.is_present("want-superflex");
     let verbose = match matches.value_of("loglevel") {
         Some(level) => level.parse::<i32>().unwrap() > 1,
         None => false,
     };
-    let default_loop_count = 500000;
+    let default_loop_count = 5000000;
     let loop_count = match matches.value_of("loop-count") {
         Some(s) => s.parse::<usize>().unwrap_or(default_loop_count),
         None => default_loop_count,
     };
 
     let prob = parse_problem(&input_file)?;
+    if want_superflex {
+        let mut wants = Vec::new();
+        for bonus in &prob.bonuses {
+            if bonus.bonus == BonusType::SUPERFLEX {
+                wants.push(bonus.clone());
+            }
+        }
+        WANT_BONUS.set(wants).unwrap();
+    } else {
+        WANT_BONUS.set(Vec::new()).unwrap();
+    }
 
-    let answer = if zero_desired {
+    let mut answer = if zero_desired {
         solve_for_zero(&prob, verbose, loop_count)
     } else {
         solve(&prob, verbose, loop_count)
     };
+
+    answer.bonus = USE_BONUS.get().unwrap().clone();
 
     println!("{}", dislike(&answer, &prob));
 
@@ -1199,6 +1270,8 @@ fn main() -> std::io::Result<()> {
                 )
                 .arg(Arg::with_name("loglevel").short("l").takes_value(true))
                 .arg(Arg::with_name("zero").short("z"))
+                .arg(Arg::with_name("superflex").short("s"))
+                .arg(Arg::with_name("want-superflex").short("w"))
                 .arg(Arg::with_name("loop-count").short("n").takes_value(true)),
         )
         .subcommand(
