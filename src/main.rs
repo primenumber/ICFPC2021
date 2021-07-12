@@ -48,6 +48,10 @@ impl Point {
         Point((self.0 as f64 * rhs) as i64, (self.1 as f64 * rhs) as i64)
     }
 
+    fn reverse_x(&self) -> Point {
+        Point(-self.0, self.1)
+    }
+
     fn rotate(&self, theta: f64) -> Point {
         Point(
             (self.0 as f64 * theta.cos() - self.1 as f64 * theta.sin()) as i64,
@@ -774,6 +778,7 @@ fn in_hole_points(prob: &Problem) -> Vec<Point> {
     points
 }
 
+#[allow(dead_code)]
 fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
     let points = in_hole_points(prob);
     let mut vertices = vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()];
@@ -801,6 +806,52 @@ fn gen_random_pose_mk2(prob: &Problem, rng: &mut SmallRng) -> Pose {
             vertices: vec![*prob.hole.first().unwrap(); prob.figure.vertices.len()],
         },
     }
+}
+
+fn gen_random_pose_mk3(prob: &Problem, rng: &mut SmallRng, verbose: bool, scale: f64) -> Pose {
+    let points = in_hole_points(prob);
+    let mut initial_pose = Pose {
+        bonus: None,
+        vertices: prob.figure.vertices.clone(),
+    };
+    let mut max_x = 0;
+    let mut max_y = 0;
+    for &p in &prob.hole {
+        max_x = max(max_x, p.0);
+        max_y = max(max_y, p.1);
+    }
+    let mut sx = 0;
+    let mut sy = 0;
+    for &p in &initial_pose.vertices {
+        sx += p.0;
+        sy += p.1;
+    }
+    let n = initial_pose.vertices.len();
+    let g = Point(sx / n as i64, sy / n as i64);
+    // transform and scale
+    for p in &mut initial_pose.vertices {
+        *p = p.sub(g).scale(scale);
+    }
+    let mut pose = initial_pose.clone();
+    for _i in 0..100000 {
+        let rad = rng.gen::<f64>() * 2.0 * (-1.0f64).acos();
+        let offset = *points.choose(rng).unwrap();
+        let flip = rng.gen::<bool>();
+        for (idx, p) in initial_pose.vertices.iter_mut().enumerate() {
+            pose.vertices[idx] = if flip {
+                p.reverse_x().rotate(rad).add(offset)
+            } else {
+                p.rotate(rad).add(offset)
+            };
+        }
+        if pose.is_in_hole(&prob.figure.edges, &prob.hole) {
+            if verbose {
+                eprintln!("gen mk3 scale: {}", scale);
+            }
+            return pose;
+        }
+    }
+    gen_random_pose_mk3(prob, rng, verbose, scale * 0.9)
 }
 
 fn negibor_list(prob: &Problem) -> Vec<Vec<usize>> {
@@ -873,12 +924,12 @@ fn improve_process(
 fn solve(prob: &Problem, verbose: bool, loop_count: usize) -> Pose {
     let mut small_rng = SmallRng::from_entropy();
 
-    let mut pose = gen_random_pose_mk2(prob, &mut small_rng);
+    let mut pose = gen_random_pose_mk3(prob, &mut small_rng, verbose, 1.0);
     if dislike(&pose, prob) == 0 {
         return pose;
     }
 
-    let start_temp: f64 = 1e6;
+    let start_temp: f64 = 1e3;
     let end_temp: f64 = 3e-2;
 
     let mut counter = ImproveCounter {
